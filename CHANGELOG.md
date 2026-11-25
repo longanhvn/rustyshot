@@ -2,6 +2,12 @@
 
 Tất cả các thay đổi đáng chú ý của **RustyShot** được ghi nhận tại đây.
 
+## [0.3.13] - 2026-11-25
+### Tính năng mới & Sửa lỗi
+- **Hỗ trợ đa ngôn ngữ (English & Tiếng Việt):**
+  - Thêm nút chuyển nhanh **`🌐 EN` / `🌐 VI`** ngay trên góc phải thanh trên cùng và tùy chọn ngôn ngữ trong **Settings**, tự động lưu cấu hình và chuyển đổi toàn bộ giao diện tức thì không cần khởi động lại app.
+- **Nạp font hệ thống Unicode (`Segoe UI` / `Tahoma` / `Noto Sans` / `SFNS`)**: khắc phục triệt để lỗi thiếu dấu tiếng Việt trên Windows, Ubuntu và macOS mà không làm tăng dung lượng file thực thi.
+
 ## [0.3.12] - 2026-11-25
 ### Tính năng mới & Bảo mật
 - Thêm tùy chọn **Open after upload** (`After Capture` & `Upload & FTP`): tự động mở link Public URL trên trình duyệt ngay sau khi upload thành công.

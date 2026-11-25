@@ -10,8 +10,8 @@ use crate::editor::{
 };
 use crate::recorder::{RecordingHandle, RecordingResult, start_recording};
 use crate::storage::{
-    CaptureRecord, ImageFormatChoice, RustyShotConfig, StorageManager, UploadProtocol,
-    VideoFormatChoice,
+    AppLanguage, CaptureRecord, ImageFormatChoice, RustyShotConfig, StorageManager, UploadProtocol,
+    VideoFormatChoice, tr,
 };
 use crate::tray::{
     HotkeyController, TrayAction, TrayController, poll_background_tray_and_hotkeys,
@@ -271,6 +271,7 @@ impl RustyShotApp {
             }
         });
 
+        install_system_unicode_fonts(&cc.egui_ctx);
         let (thumb_tx, thumb_rx) = mpsc::channel();
         Self {
             storage,
@@ -861,13 +862,30 @@ impl RustyShotApp {
                             .color(Color32::from_rgb(56, 189, 248)),
                     );
                     ui.label(
-                        RichText::new("v0.3.12")
+                        RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
                             .size(11.0)
                             .color(Color32::from_rgb(148, 163, 184)),
                     );
 
+                    let lang = self.config.language;
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.button("📂 Folder").clicked() {
+                        let next_lang = match lang {
+                            AppLanguage::English => AppLanguage::Vietnamese,
+                            AppLanguage::Vietnamese => AppLanguage::English,
+                        };
+                        if ui
+                            .small_button(format!("🌐 {}", lang.short_code()))
+                            .on_hover_text(tr(
+                                lang,
+                                "Switch language (English / Tiếng Việt)",
+                                "Đổi ngôn ngữ (Tiếng Việt / English)",
+                            ))
+                            .clicked()
+                        {
+                            self.config.language = next_lang;
+                            let _ = self.storage.save_config(&self.config);
+                        }
+                        if ui.button(tr(lang, "📂 Folder", "📂 Thư mục")).clicked() {
                             let _ = std::fs::create_dir_all(&self.config.save_dir);
                             open_folder_in_os(&self.config.save_dir);
                         }
@@ -875,9 +893,21 @@ impl RustyShotApp {
                             .width(74.0)
                             .selected_text(format!("⏱ {}s", self.capture_delay_secs))
                             .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut self.capture_delay_secs, 0, "0s (Now)");
-                                ui.selectable_value(&mut self.capture_delay_secs, 3, "3s Delay");
-                                ui.selectable_value(&mut self.capture_delay_secs, 5, "5s Delay");
+                                ui.selectable_value(
+                                    &mut self.capture_delay_secs,
+                                    0,
+                                    tr(lang, "0s (Now)", "0s (Ngay)"),
+                                );
+                                ui.selectable_value(
+                                    &mut self.capture_delay_secs,
+                                    3,
+                                    tr(lang, "3s Delay", "Trễ 3s"),
+                                );
+                                ui.selectable_value(
+                                    &mut self.capture_delay_secs,
+                                    5,
+                                    tr(lang, "5s Delay", "Trễ 5s"),
+                                );
                             });
                         let has_hk_err = self.hotkey_status.contains("in use")
                             || self.hotkey_status.contains("unavailable")
@@ -984,6 +1014,7 @@ impl RustyShotApp {
                 });
         }
 
+        let lang = self.config.language;
         // Left Navigation Sidebar
         egui::SidePanel::left("rustyshot_sidebar")
             .exact_width(156.0)
@@ -991,11 +1022,11 @@ impl RustyShotApp {
             .show(ctx, |ui| {
                 ui.add_space(10.0);
                 let nav_items = [
-                    (DashboardTab::Capture, "📷  Capture"),
-                    (DashboardTab::Tools, "🛠  Tools"),
+                    (DashboardTab::Capture, tr(lang, "📷  Capture", "📷  Chụp & Quay")),
+                    (DashboardTab::Tools, tr(lang, "🛠  Tools", "🛠  Công cụ")),
                     (DashboardTab::Upload, "☁  Upload & FTP"),
-                    (DashboardTab::History, "🕘  History"),
-                    (DashboardTab::Settings, "⚙  Settings"),
+                    (DashboardTab::History, tr(lang, "🕘  History", "🕘  Lịch sử")),
+                    (DashboardTab::Settings, tr(lang, "⚙  Settings", "⚙  Cài đặt")),
                 ];
                 for (tab, label) in nav_items {
                     let active = self.active_tab == tab;
@@ -1035,7 +1066,11 @@ impl RustyShotApp {
                         }
                     } else {
                         ui.label(
-                            RichText::new("Tip: Ctrl+V or Drop image")
+                            RichText::new(tr(
+                                lang,
+                                "Tip: Ctrl+V or Drop image",
+                                "Mẹo: Ctrl+V hoặc Kéo thả ảnh",
+                            ))
                                 .size(10.5)
                                 .color(Color32::from_rgb(100, 116, 139)),
                         );
@@ -1097,7 +1132,7 @@ impl RustyShotApp {
                         ui.spacing_mut().item_spacing.x = 10.0;
                         if capture_card_btn(
                             ui,
-                            "✂ Region Capture",
+                            tr(lang, "✂ Region Capture", "✂ Chụp vùng"),
                             &self.config.region_hotkey,
                             Color32::from_rgb(14, 165, 233),
                             card_w,
@@ -1108,7 +1143,7 @@ impl RustyShotApp {
                         }
                         if capture_card_btn(
                             ui,
-                            "🖥 Fullscreen",
+                            tr(lang, "🖥 Fullscreen", "🖥 Toàn màn hình"),
                             &self.config.fullscreen_hotkey,
                             Color32::from_rgb(59, 130, 246),
                             card_w,
@@ -1119,8 +1154,8 @@ impl RustyShotApp {
                         }
                         if capture_card_btn(
                             ui,
-                            "🪟 Window",
-                            "Pick open window",
+                            tr(lang, "🪟 Window", "🪟 Cửa sổ"),
+                            tr(lang, "Pick open window", "Chọn cửa sổ đang mở"),
                             Color32::from_rgb(168, 85, 247),
                             card_w,
                         )
@@ -1142,7 +1177,7 @@ impl RustyShotApp {
                         );
                         if capture_card_btn(
                             ui,
-                            "🎬 Record Full",
+                            tr(lang, "🎬 Record Full", "🎬 Quay toàn màn"),
                             &rec_sub,
                             Color32::from_rgb(239, 68, 68),
                             card_w4,
@@ -1153,8 +1188,8 @@ impl RustyShotApp {
                         }
                         if capture_card_btn(
                             ui,
-                            "✂ Record Region",
-                            "Select area & Rec",
+                            tr(lang, "✂ Record Region", "✂ Quay theo vùng"),
+                            tr(lang, "Select area & Rec", "Chọn vùng & Quay"),
                             Color32::from_rgb(244, 63, 94),
                             card_w4,
                         )
@@ -1164,8 +1199,8 @@ impl RustyShotApp {
                         }
                         if capture_card_btn(
                             ui,
-                            "🎨 Color Picker",
-                            "Pick pixel HEX/RGB",
+                            tr(lang, "🎨 Color Picker", "🎨 Lấy mã màu"),
+                            tr(lang, "Pick pixel HEX/RGB", "Chấm màu HEX/RGB"),
                             Color32::from_rgb(245, 158, 11),
                             card_w4,
                         )
@@ -1175,8 +1210,8 @@ impl RustyShotApp {
                         }
                         if capture_card_btn(
                             ui,
-                            "🖼 Open / Paste",
-                            "File or Ctrl+V",
+                            tr(lang, "🖼 Open / Paste", "🖼 Mở / Dán ảnh"),
+                            tr(lang, "File or Ctrl+V", "Chọn file hoặc Ctrl+V"),
                             Color32::from_rgb(34, 197, 94),
                             card_w4,
                         )
@@ -1201,14 +1236,14 @@ impl RustyShotApp {
                         .inner_margin(egui::Margin::symmetric(10.0, 6.0))
                         .show(ui, |ui| {
                             ui.horizontal_wrapped(|ui| {
-                                ui.label(RichText::new("After Capture:").strong().size(11.5).color(Color32::from_rgb(148, 163, 184)));
+                                ui.label(RichText::new(tr(lang, "After Capture:", "Sau khi chụp:")).strong().size(11.5).color(Color32::from_rgb(148, 163, 184)));
                                 let mut changed = false;
-                                changed |= ui.checkbox(&mut self.config.auto_copy_clipboard, "Copy").changed();
-                                changed |= ui.checkbox(&mut self.config.auto_save_file, "Save File").changed();
-                                changed |= ui.checkbox(&mut self.config.after_capture_open_editor, "Open Editor").changed();
-                                changed |= ui.checkbox(&mut self.config.after_capture_auto_pin, "Pin").changed();
+                                changed |= ui.checkbox(&mut self.config.auto_copy_clipboard, tr(lang, "Copy", "Sao chép")).changed();
+                                changed |= ui.checkbox(&mut self.config.auto_save_file, tr(lang, "Save File", "Lưu file")).changed();
+                                changed |= ui.checkbox(&mut self.config.after_capture_open_editor, tr(lang, "Open Editor", "Mở Editor")).changed();
+                                changed |= ui.checkbox(&mut self.config.after_capture_auto_pin, tr(lang, "Pin", "Ghim ảnh")).changed();
                                 changed |= ui.checkbox(&mut self.config.ftp.auto_upload, "Upload FTP").changed();
-                                changed |= ui.checkbox(&mut self.config.ftp.open_after_upload, "Open after upload").changed();
+                                changed |= ui.checkbox(&mut self.config.ftp.open_after_upload, tr(lang, "Open after upload", "Mở link sau upload")).changed();
                                 if changed {
                                     let _ = self.storage.save_config(&self.config);
                                 }
@@ -1217,9 +1252,9 @@ impl RustyShotApp {
 
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("Recent Captures").size(13.5).strong());
+                        ui.label(RichText::new(tr(lang, "Recent Captures", "Ảnh & Video gần đây")).size(13.5).strong());
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if !self.config.recent_captures.is_empty() && ui.small_button("View All →").clicked() {
+                            if !self.config.recent_captures.is_empty() && ui.small_button(tr(lang, "View All →", "Xem tất cả →")).clicked() {
                                 self.active_tab = DashboardTab::History;
                             }
                         });
@@ -1229,29 +1264,33 @@ impl RustyShotApp {
                 }
 
                 DashboardTab::Tools => {
-                    ui.label(RichText::new("🛠 Screen & Image Tools").size(15.0).strong());
+                    ui.label(RichText::new(tr(lang, "🛠 Screen & Image Tools", "🛠 Công cụ Ảnh & Màn hình")).size(15.0).strong());
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        if ui.button("🎨 Launch Screen Color Picker").clicked() {
+                        if ui.button(tr(lang, "🎨 Launch Screen Color Picker", "🎨 Bật lấy mã màu màn hình")).clicked() {
                             self.trigger_capture(ctx, TrayAction::ColorPicker);
                         }
-                        if ui.button("📋 Paste Clipboard Image to Editor (Ctrl+V)").clicked() {
+                        if ui.button(tr(lang, "📋 Paste Clipboard Image to Editor (Ctrl+V)", "📋 Dán ảnh từ Clipboard vào Editor (Ctrl+V)")).clicked() {
                             match paste_image_from_clipboard() {
                                 Ok(img) => self.open_in_editor(ctx, img),
                                 Err(e) => self.set_toast(e),
                             }
                         }
-                        if ui.button("🎬 Record Region (Select First)").clicked() {
+                        if ui.button(tr(lang, "🎬 Record Region (Select First)", "🎬 Quay theo vùng (Chọn vùng trước)")).clicked() {
                             self.trigger_capture(ctx, TrayAction::CaptureRegion);
                         }
                     });
 
                     ui.add_space(12.0);
-                    ui.label(RichText::new("Recent Picked Colors").size(13.0).strong());
+                    ui.label(RichText::new(tr(lang, "Recent Picked Colors", "Mã màu đã lấy gần đây")).size(13.0).strong());
                     ui.add_space(6.0);
                     if self.config.picked_colors.is_empty() {
                         ui.label(
-                            RichText::new("No colors picked yet. Use Color Picker or press C on Region Overlay.")
+                            RichText::new(tr(
+                                lang,
+                                "No colors picked yet. Use Color Picker or press C on Region Overlay.",
+                                "Chưa có mã màu nào. Hãy dùng Lấy mã màu hoặc bấm C lúc chọn vùng.",
+                            ))
                                 .size(12.0)
                                 .color(Color32::from_rgb(148, 163, 184)),
                         );
@@ -1280,26 +1319,26 @@ impl RustyShotApp {
                 }
 
                 DashboardTab::Upload => {
-                    ui.label(RichText::new("☁ Upload & FTP Destination").size(15.0).strong());
+                    ui.label(RichText::new(tr(lang, "☁ Upload & FTP Destination", "☁ Cấu hình Upload & FTP")).size(15.0).strong());
                     ui.add_space(8.0);
-                    if ui.button("📤 Upload Any File Now...").clicked()
+                    if ui.button(tr(lang, "📤 Upload Any File Now...", "📤 Chọn file bất kỳ để Upload ngay...")).clicked()
                         && let Some(path) = rfd::FileDialog::new().pick_file()
                     {
                         self.spawn_ftp_upload(path);
                     }
                     ui.add_space(8.0);
-                    ui.checkbox(&mut self.config.ftp.enabled, "Enable Remote Upload (SFTP / FTP)");
+                    ui.checkbox(&mut self.config.ftp.enabled, tr(lang, "Enable Remote Upload (SFTP / FTP)", "Bật Upload từ xa (SFTP / FTP)"));
                     ui.checkbox(
                         &mut self.config.ftp.auto_upload,
-                        "Auto-upload after capture / recording",
+                        tr(lang, "Auto-upload after capture / recording", "Tự động upload sau khi chụp / quay"),
                     );
                     ui.checkbox(
                         &mut self.config.ftp.open_after_upload,
-                        "Open public URL in browser after upload",
+                        tr(lang, "Open public URL in browser after upload", "Tự mở link Public URL sau khi upload"),
                     );
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
-                        ui.label("Protocol:");
+                        ui.label(tr(lang, "Protocol:", "Giao thức:"));
                         for (proto, default_port) in [
                             (UploadProtocol::Sftp, 22u16),
                             (UploadProtocol::FtpsExplicit, 21u16),
@@ -1345,18 +1384,18 @@ impl RustyShotApp {
                     });
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        if ui.button("🔌 Test FTP Connection").clicked() {
+                        if ui.button(tr(lang, "🔌 Test FTP Connection", "🔌 Kiểm tra kết nối")).clicked() {
                             let cfg = self.config.ftp.clone();
                             let (tx, rx) = mpsc::channel();
                             self.upload_rx = Some(rx);
-                            self.ftp_test_status = Some("Testing FTP...".to_string());
+                            self.ftp_test_status = Some(tr(lang, "Testing connection...", "Đang kiểm tra kết nối...").to_string());
                             std::thread::spawn(move || {
                                 let _ = tx.send(test_ftp_connection(&cfg).map(|m| (m, None, None)));
                             });
                         }
-                        if ui.button("💾 Save FTP Config").clicked() {
+                        if ui.button(tr(lang, "💾 Save FTP Config", "💾 Lưu cấu hình FTP")).clicked() {
                             let _ = self.storage.save_config(&self.config);
-                            self.set_toast("FTP settings saved");
+                            self.set_toast(tr(lang, "FTP settings saved", "Đã lưu cấu hình FTP"));
                         }
                         if let Some(ref st) = self.ftp_test_status {
                             ui.label(RichText::new(st).size(11.5).color(Color32::from_rgb(56, 189, 248)));
@@ -1366,15 +1405,15 @@ impl RustyShotApp {
 
                 DashboardTab::History => {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("🕘 Capture History").size(15.0).strong());
+                        ui.label(RichText::new(tr(lang, "🕘 Capture History", "🕘 Lịch sử chụp & quay")).size(15.0).strong());
                         ui.add_space(12.0);
                         ui.add(
                             egui::TextEdit::singleline(&mut self.history_search)
-                                .hint_text("Filter by name, mode, or date...")
+                                .hint_text(tr(lang, "Filter by name, mode, or date...", "Tìm theo tên, chế độ hoặc ngày..."))
                                 .desired_width(220.0),
                         );
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if !self.config.recent_captures.is_empty() && ui.small_button("Clear All").clicked() {
+                            if !self.config.recent_captures.is_empty() && ui.small_button(tr(lang, "Clear All", "Xóa tất cả")).clicked() {
                                 self.config.recent_captures.clear();
                                 self.thumb_cache.clear();
                                 let _ = self.storage.save_config(&self.config);
@@ -1387,13 +1426,27 @@ impl RustyShotApp {
 
                 DashboardTab::Settings => {
                     egui::ScrollArea::vertical().show(ui, |ui| {
-                        ui.label(RichText::new("⚙ General & Output").size(15.0).strong());
+                        ui.label(RichText::new(tr(lang, "⚙ General & Output", "⚙ Cài đặt chung & Lưu file")).size(15.0).strong());
                         ui.add_space(6.0);
                         ui.horizontal(|ui| {
-                            ui.label("Save Folder:");
+                            ui.label(tr(lang, "Language / Ngôn ngữ:", "Ngôn ngữ / Language:"));
+                            let mut lang_changed = false;
+                            lang_changed |= ui
+                                .selectable_value(&mut self.config.language, AppLanguage::English, "🇬🇧 English")
+                                .changed();
+                            lang_changed |= ui
+                                .selectable_value(&mut self.config.language, AppLanguage::Vietnamese, "🇻🇳 Tiếng Việt")
+                                .changed();
+                            if lang_changed {
+                                let _ = self.storage.save_config(&self.config);
+                            }
+                        });
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            ui.label(tr(lang, "Save Folder:", "Thư mục lưu:"));
                             let mut dir_str = self.config.save_dir.to_string_lossy().to_string();
                             ui.add_enabled(false, egui::TextEdit::singleline(&mut dir_str).desired_width(260.0));
-                            if ui.button("Browse...").clicked()
+                            if ui.button(tr(lang, "Browse...", "Chọn thư mục...")).clicked()
                                 && let Some(dir) = rfd::FileDialog::new().pick_folder()
                             {
                                 self.config.save_dir = dir;
@@ -1402,7 +1455,7 @@ impl RustyShotApp {
                         });
                         ui.add_space(6.0);
                         ui.horizontal(|ui| {
-                            ui.label("Image Format:");
+                            ui.label(tr(lang, "Image Format:", "Định dạng ảnh:"));
                             egui::ComboBox::from_id_salt("fmt_combo")
                                 .selected_text(self.config.format.label())
                                 .show_ui(ui, |ui| {
@@ -1411,16 +1464,16 @@ impl RustyShotApp {
                                 });
                         });
                         if self.config.format == ImageFormatChoice::Jpeg {
-                            ui.add(egui::Slider::new(&mut self.config.jpeg_quality, 50..=100).text("JPEG Quality"));
+                            ui.add(egui::Slider::new(&mut self.config.jpeg_quality, 50..=100).text(tr(lang, "JPEG Quality", "Chất lượng JPEG")));
                         }
-                        ui.checkbox(&mut self.config.hide_window_on_capture, "Hide RustyShot window before capture");
-                        ui.checkbox(&mut self.config.minimize_to_tray, "Minimize to System Tray on close");
+                        ui.checkbox(&mut self.config.hide_window_on_capture, tr(lang, "Hide RustyShot window before capture", "Ẩn cửa sổ RustyShot trước khi chụp"));
+                        ui.checkbox(&mut self.config.minimize_to_tray, tr(lang, "Minimize to System Tray on close", "Thu gọn xuống khay hệ thống khi đóng"));
 
                         ui.add_space(8.0);
                         ui.separator();
-                        ui.label(RichText::new("🎬 Video Recording").strong());
+                        ui.label(RichText::new(tr(lang, "🎬 Video Recording", "🎬 Quay màn hình")).strong());
                         ui.horizontal(|ui| {
-                            ui.label("Video Format:");
+                            ui.label(tr(lang, "Video Format:", "Định dạng Video:"));
                             egui::ComboBox::from_id_salt("vfmt_combo")
                                 .selected_text(self.config.video_format.label())
                                 .show_ui(ui, |ui| {
@@ -1438,14 +1491,18 @@ impl RustyShotApp {
                         });
                         ui.add(egui::Slider::new(&mut self.config.video_fps, 5..=30).text("FPS"));
                         ui.label(
-                            RichText::new("Encoder: Built-in H.264 (MP4) & GIF ready")
+                            RichText::new(tr(
+                                lang,
+                                "Encoder: Built-in H.264 (MP4) & GIF ready",
+                                "Bộ mã hóa: Tích hợp sẵn H.264 (MP4) & GIF",
+                            ))
                                 .size(11.0)
                                 .color(Color32::from_rgb(34, 197, 94)),
                         );
 
                         ui.add_space(8.0);
                         ui.separator();
-                        ui.label(RichText::new("⌨ Global Hotkeys (Click to set)").strong());
+                        ui.label(RichText::new(tr(lang, "⌨ Global Hotkeys (Click to set)", "⌨ Phím tắt toàn cục (Nhấp vào để đổi)")).strong());
 
                         // Capture key press when listening for a new hotkey
                         if let Some(target) = self.capturing_hotkey {
@@ -1591,7 +1648,7 @@ impl RustyShotApp {
                             }
                         });
                         ui.add_space(8.0);
-                        if ui.button("💾 Save & Apply Settings").clicked() {
+                        if ui.button(tr(lang, "💾 Save & Apply Settings", "💾 Lưu & Áp dụng cài đặt")).clicked() {
                             let _ = self.storage.save_config(&self.config);
                             if let Some(ref mut hk) = self.hotkeys {
                                 self.hotkey_status = hk.reregister(
@@ -1600,7 +1657,7 @@ impl RustyShotApp {
                                     &self.config.record_hotkey,
                                 );
                             }
-                            self.set_toast("Settings saved");
+                            self.set_toast(tr(lang, "Settings saved", "Đã lưu cài đặt"));
                         }
 
                         ui.add_space(16.0);
@@ -1627,16 +1684,18 @@ impl RustyShotApp {
                                 });
                                 ui.add_space(4.0);
                                 ui.label(
-                                    RichText::new(
+                                    RichText::new(tr(
+                                        lang,
                                         "Lightweight cross-platform screenshot, annotation, screen recorder & SFTP/FTP uploader built with Rust.",
-                                    )
+                                        "Phần mềm chụp ảnh, chú thích, quay màn hình & upload SFTP/FTP đa nền tảng gọn nhẹ viết bằng Rust.",
+                                    ))
                                     .size(11.5)
                                     .color(Color32::from_rgb(148, 163, 184)),
                                 );
                                 ui.add_space(6.0);
                                 ui.horizontal(|ui| {
                                     ui.label(
-                                        RichText::new("Repository:")
+                                        RichText::new(tr(lang, "Repository:", "Mã nguồn (GitHub):"))
                                             .size(11.5)
                                             .color(Color32::from_rgb(148, 163, 184)),
                                     );
@@ -1644,7 +1703,7 @@ impl RustyShotApp {
                                         "github.com/longanhvn/rustyshot",
                                         "https://github.com/longanhvn/rustyshot",
                                     );
-                                    if ui.small_button("📦 Releases").clicked() {
+                                    if ui.small_button(tr(lang, "📦 Releases", "📦 Tải bản mới")).clicked() {
                                         ctx.open_url(egui::OpenUrl::new_tab(
                                             "https://github.com/longanhvn/rustyshot/releases",
                                         ));
@@ -3087,6 +3146,46 @@ impl eframe::App for RustyShotApp {
 
         // Poll tray/hotkeys periodically when idle
         ctx.request_repaint_after(Duration::from_millis(120));
+    }
+}
+
+fn install_system_unicode_fonts(ctx: &egui::Context) {
+    let candidates: &[&str] = if cfg!(target_os = "windows") {
+        &[
+            r"C:\Windows\Fonts\segoeui.ttf",
+            r"C:\Windows\Fonts\tahoma.ttf",
+            r"C:\Windows\Fonts\arial.ttf",
+        ]
+    } else if cfg!(target_os = "macos") {
+        &[
+            "/System/Library/Fonts/SFNS.ttf",
+            "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+            "/Library/Fonts/Arial.ttf",
+        ]
+    } else {
+        &[
+            "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        ]
+    };
+
+    for path in candidates {
+        if let Ok(bytes) = std::fs::read(path) {
+            let mut fonts = egui::FontDefinitions::default();
+            fonts.font_data.insert(
+                "sys_unicode".to_owned(),
+                egui::FontData::from_owned(bytes).into(),
+            );
+            if let Some(prop) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+                prop.insert(0, "sys_unicode".to_owned());
+            }
+            if let Some(mono) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
+                mono.push("sys_unicode".to_owned());
+            }
+            ctx.set_fonts(fonts);
+            break;
+        }
     }
 }
 

@@ -57,6 +57,30 @@ fn default_true() -> bool {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum AppLanguage {
+    #[default]
+    English,
+    Vietnamese,
+}
+
+impl AppLanguage {
+    pub fn short_code(self) -> &'static str {
+        match self {
+            Self::English => "EN",
+            Self::Vietnamese => "VI",
+        }
+    }
+}
+
+#[inline]
+pub fn tr(lang: AppLanguage, en: &'static str, vi: &'static str) -> &'static str {
+    match lang {
+        AppLanguage::English => en,
+        AppLanguage::Vietnamese => vi,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum UploadProtocol {
     Ftp,
     #[default]
@@ -127,6 +151,7 @@ pub struct CaptureRecord {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RustyShotConfig {
+    pub language: AppLanguage,
     pub save_dir: PathBuf,
     pub format: ImageFormatChoice,
     pub jpeg_quality: u8,
@@ -163,6 +188,7 @@ pub fn portable_data_dir() -> PathBuf {
 impl Default for RustyShotConfig {
     fn default() -> Self {
         Self {
+            language: AppLanguage::English,
             save_dir: portable_data_dir(),
             format: ImageFormatChoice::Png,
             jpeg_quality: 92,

@@ -37,6 +37,8 @@
 - **Hiệu năng cao & Bất đồng bộ:**
   - Nén PNG tốc độ cao (`Fast` + `Sub`), lưu file ảnh, đóng gói video và tải ảnh thu nhỏ (Thumbnail) chạy hoàn toàn trên luồng nền, giao diện luôn mượt mà.
   - Định dạng mặc định `.png` lossless; toàn bộ tên file đầu ra chuẩn chữ thường (`rustyshot_YYYY-MM-DD_HH-MM-SS.png`, `rustyshot_rec_YYYY-MM-DD_HH-MM-SS.mp4`).
+- **Đa ngôn ngữ (English / Tiếng Việt):**
+  - Chuyển đổi trực tiếp giữa **English** và **Tiếng Việt** bằng nút **`🌐 EN` / `🌐 VI`** ở thanh trên cùng hoặc trong **Settings**, tự động nạp font hệ thống Unicode sắc nét.
 - **100% Portable & Single Instance:**
   - Tự động lưu cấu hình và media ngay cạnh file chạy: `./data/RustyShot.json`, `./data/image/`, `./data/video/`.
   - Chỉ chạy 1 tiến trình duy nhất; thu gọn xuống khay hệ thống (System Tray) và khôi phục nhanh khi click icon Tray hoặc mở lại ứng dụng.
