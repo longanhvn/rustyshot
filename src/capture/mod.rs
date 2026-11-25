@@ -192,9 +192,23 @@ pub fn save_image_to_file(
             .map_err(|e| format!("Failed to create output folder: {e}"))?;
     }
     match fmt {
-        ImageFormatChoice::Png => img
-            .save_with_format(path, image::ImageFormat::Png)
-            .map_err(|e| format!("Failed to save PNG: {e}")),
+        ImageFormatChoice::Png => {
+            use image::ImageEncoder;
+            use image::codecs::png::{CompressionType, FilterType, PngEncoder};
+            let file =
+                File::create(path).map_err(|e| format!("Failed to create PNG file: {e}"))?;
+            let writer = BufWriter::new(file);
+            let encoder =
+                PngEncoder::new_with_quality(writer, CompressionType::Fast, FilterType::Sub);
+            encoder
+                .write_image(
+                    img.as_raw(),
+                    img.width(),
+                    img.height(),
+                    image::ExtendedColorType::Rgba8,
+                )
+                .map_err(|e| format!("Failed to save PNG: {e}"))
+        }
         ImageFormatChoice::Jpeg => {
             let rgb = DynamicImage::ImageRgba8(img.clone()).to_rgb8();
             let file = File::create(path).map_err(|e| format!("Failed to create JPEG file: {e}"))?;

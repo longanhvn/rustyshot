@@ -8,7 +8,7 @@ use crate::editor::{
     AnnotationHistory, AnnotationItem, PALETTE_COLORS, ToolKind, paint_annotations_egui,
     render_annotations_to_image,
 };
-use crate::recorder::{RecordingHandle, start_recording};
+use crate::recorder::{RecordingHandle, RecordingResult, start_recording};
 use crate::storage::{
     CaptureRecord, ImageFormatChoice, RustyShotConfig, StorageManager, UploadProtocol,
     VideoFormatChoice,
@@ -25,7 +25,7 @@ use egui::{
     ViewportId, pos2, vec2,
 };
 use image::RgbaImage;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
@@ -105,6 +105,20 @@ enum DragAction {
     DrawingAnnotation,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HotkeyTarget {
+    Region,
+    Fullscreen,
+    Record,
+}
+
+#[derive(Clone, Debug)]
+enum UploadBannerState {
+    Uploading { filename: String, path: PathBuf },
+    Success { message: String, url: Option<String> },
+    Error(String),
+}
+
 struct PinnedShot {
     id: ViewportId,
     image: RgbaImage,
@@ -148,8 +162,14 @@ pub struct RustyShotApp {
 
     // Screen recorder & FTP background tasks
     active_recording: Option<RecordingHandle>,
-    upload_rx: Option<mpsc::Receiver<Result<String, String>>>,
+    recording_region: Option<[u32; 4]>,
+    rec_stop_requested: Arc<AtomicBool>,
+    rec_stop_rx: Option<mpsc::Receiver<Result<RecordingResult, String>>>,
+    save_rx: Option<mpsc::Receiver<(Result<PathBuf, String>, bool)>>,
+    upload_rx: Option<mpsc::Receiver<Result<(String, Option<String>, Option<PathBuf>), String>>>,
+    upload_banner: Option<UploadBannerState>,
     ftp_test_status: Option<String>,
+    capturing_hotkey: Option<HotkeyTarget>,
 
     // Region selection rect in IMAGE pixel coordinates
     selection_rect: Option<Rect>,
@@ -174,8 +194,11 @@ pub struct RustyShotApp {
     editor_crop_rect: Option<Rect>,
     editor_crop_anchor: Option<Pos2>,
 
-    // Thumbnail cache for Dashboard recent captures
+    // Thumbnail cache for Dashboard recent captures (async loaded)
     thumb_cache: HashMap<String, TextureHandle>,
+    thumb_loading: HashSet<String>,
+    thumb_tx: mpsc::Sender<(String, Option<RgbaImage>)>,
+    thumb_rx: mpsc::Receiver<(String, Option<RgbaImage>)>,
 }
 
 impl RustyShotApp {
@@ -248,6 +271,7 @@ impl RustyShotApp {
             }
         });
 
+        let (thumb_tx, thumb_rx) = mpsc::channel();
         Self {
             storage,
             config,
@@ -273,8 +297,14 @@ impl RustyShotApp {
             pinned_shots: Vec::new(),
             next_pin_id: 1,
             active_recording: None,
+            recording_region: None,
+            rec_stop_requested: Arc::new(AtomicBool::new(false)),
+            rec_stop_rx: None,
+            save_rx: None,
             upload_rx: None,
+            upload_banner: None,
             ftp_test_status: None,
+            capturing_hotkey: None,
             selection_rect: None,
             drag_action: DragAction::None,
             drag_anchor: Pos2::ZERO,
@@ -291,6 +321,9 @@ impl RustyShotApp {
             editor_crop_rect: None,
             editor_crop_anchor: None,
             thumb_cache: HashMap::new(),
+            thumb_loading: HashSet::new(),
+            thumb_tx,
+            thumb_rx,
         }
     }
 
@@ -576,15 +609,24 @@ impl RustyShotApp {
                 Err(e) => notes.push(format!("Clipboard error: {e}")),
             }
         }
+        let trigger_auto_upload = self.config.ftp.enabled && self.config.ftp.auto_upload;
         if self.config.auto_save_file {
-            match StorageManager::build_output_path(&self.config.save_dir, self.config.format)
-                .and_then(|p| {
-                    save_image_to_file(&img, &p, self.config.format, self.config.jpeg_quality)?;
-                    Ok(p)
-                }) {
+            match StorageManager::build_output_path(&self.config.save_dir, self.config.format) {
                 Ok(p) => {
-                    notes.push(format!("Saved {}", p.file_name().unwrap_or_default().to_string_lossy()));
-                    saved_path = Some(p);
+                    notes.push(format!(
+                        "Saving {}...",
+                        p.file_name().unwrap_or_default().to_string_lossy()
+                    ));
+                    saved_path = Some(p.clone());
+                    let img_bg = img.clone();
+                    let fmt = self.config.format;
+                    let jq = self.config.jpeg_quality;
+                    let (tx, rx) = mpsc::channel();
+                    self.save_rx = Some(rx);
+                    std::thread::spawn(move || {
+                        let res = save_image_to_file(&img_bg, &p, fmt, jq).map(|()| p);
+                        let _ = tx.send((res, trigger_auto_upload));
+                    });
                 }
                 Err(e) => notes.push(format!("Save error: {e}")),
             }
@@ -595,19 +637,13 @@ impl RustyShotApp {
             timestamp: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
             width: img.width(),
             height: img.height(),
-            file_path: saved_path.clone(),
+            file_path: saved_path,
             mode: mode_label.to_string(),
+            uploaded_url: None,
         };
         self.config.recent_captures.insert(0, record);
         self.config.recent_captures.truncate(24);
         let _ = self.storage.save_config(&self.config);
-
-        if self.config.ftp.enabled
-            && self.config.ftp.auto_upload
-            && let Some(ref p) = saved_path
-        {
-            self.spawn_ftp_upload(p.clone());
-        }
 
         if self.config.after_capture_auto_pin {
             self.pin_image(img.clone());
@@ -643,6 +679,7 @@ impl RustyShotApp {
         match start_recording(out_path, fmt, self.config.video_fps, region) {
             Ok(handle) => {
                 self.active_recording = Some(handle);
+                self.recording_region = region;
                 self.set_toast(format!("Recording started ({})", fmt.extension().to_uppercase()));
             }
             Err(e) => self.set_toast(e),
@@ -650,52 +687,46 @@ impl RustyShotApp {
     }
 
     fn stop_screen_recording(&mut self) {
+        self.recording_region = None;
         let Some(handle) = self.active_recording.take() else {
             return;
         };
-        match handle.stop() {
-            Ok(res) => {
-                let record = CaptureRecord {
-                    id: Local::now().format("%Y%m%d%H%M%S%3f").to_string(),
-                    timestamp: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-                    width: res.width,
-                    height: res.height,
-                    file_path: Some(res.path.clone()),
-                    mode: format!("Video ({})", res.format.extension().to_uppercase()),
-                };
-                self.config.recent_captures.insert(0, record);
-                self.config.recent_captures.truncate(24);
-                let _ = self.storage.save_config(&self.config);
-                self.set_toast(format!(
-                    "Saved {} ({} frames)",
-                    res.path.file_name().unwrap_or_default().to_string_lossy(),
-                    res.frames
-                ));
-                if self.config.ftp.enabled && self.config.ftp.auto_upload {
-                    self.spawn_ftp_upload(res.path);
-                }
-            }
-            Err(e) => self.set_toast(format!("Recording failed: {e}")),
-        }
+        let (tx, rx) = mpsc::channel();
+        self.rec_stop_rx = Some(rx);
+        self.set_toast("Finalizing video...");
+        std::thread::spawn(move || {
+            let _ = tx.send(handle.stop());
+        });
     }
 
     fn spawn_ftp_upload(&mut self, path: PathBuf) {
         let ftp_cfg = self.config.ftp.clone();
         if ftp_cfg.host.trim().is_empty() {
-            self.set_toast("FTP host is not configured in Settings");
+            let err = "FTP host is not configured in Settings".to_string();
+            self.upload_banner = Some(UploadBannerState::Error(err.clone()));
+            self.set_toast(err);
             return;
         }
+        let filename = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("file")
+            .to_string();
         let (tx, rx) = mpsc::channel();
         self.upload_rx = Some(rx);
-        self.set_toast("Uploading to FTP...");
+        self.upload_banner = Some(UploadBannerState::Uploading {
+            filename: filename.clone(),
+            path: path.clone(),
+        });
+        self.set_toast(format!("Uploading {filename}..."));
         std::thread::spawn(move || {
             let res = upload_file_to_ftp(&path, &ftp_cfg).map(|up| {
-                if let Some(url) = up.public_url {
-                    let _ = copy_text_to_clipboard(&url);
-                    format!("Uploaded! URL copied: {url}")
+                let msg = if let Some(ref url) = up.public_url {
+                    format!("Uploaded! URL: {url}")
                 } else {
-                    format!("Uploaded to FTP: {}", up.remote_path)
-                }
+                    format!("Uploaded to server: {}", up.remote_path)
+                };
+                (msg, up.public_url, Some(path))
             });
             let _ = tx.send(res);
         });
@@ -716,14 +747,49 @@ impl RustyShotApp {
     }
 
     fn render_recording_floating_bar(&mut self, ctx: &egui::Context) {
+        if self.rec_stop_requested.swap(false, Ordering::Relaxed) {
+            self.stop_screen_recording();
+            return;
+        }
         let Some(ref rec_handle) = self.active_recording else {
             return;
         };
+        if let Some([rx, ry, rw, rh]) = self.recording_region {
+            let scale = self.working_scale.max(1.0);
+            let lx = (self.working_origin.0 as f32 + rx as f32) / scale;
+            let ly = (self.working_origin.1 as f32 + ry as f32) / scale;
+            let lw = (rw as f32 / scale).max(20.0);
+            let lh = (rh as f32 / scale).max(20.0);
+            let t = 3.0_f32;
+            let edges = [
+                ("rustyshot_rec_edge_top", lx - t, ly - t, lw + t * 2.0, t),
+                ("rustyshot_rec_edge_bottom", lx - t, ly + lh, lw + t * 2.0, t),
+                ("rustyshot_rec_edge_left", lx - t, ly, t, lh),
+                ("rustyshot_rec_edge_right", lx + lw, ly, t, lh),
+            ];
+            for (name, ex, ey, ew, eh) in edges {
+                let edge_id = ViewportId::from_hash_of(name);
+                ctx.show_viewport_deferred(
+                    edge_id,
+                    ViewportBuilder::default()
+                        .with_title("RustyShot REC Border")
+                        .with_decorations(false)
+                        .with_always_on_top()
+                        .with_mouse_passthrough(true)
+                        .with_position([ex, ey])
+                        .with_inner_size([ew.max(1.0), eh.max(1.0)]),
+                    move |fctx, _class| {
+                        egui::CentralPanel::default()
+                            .frame(egui::Frame::none().fill(Color32::from_rgb(239, 68, 68)))
+                            .show(fctx, |_ui| {});
+                    },
+                );
+            }
+        }
         let secs = rec_handle.elapsed_secs();
         let frames = rec_handle.frames();
         let ext = rec_handle.format().extension().to_uppercase();
-        let stop_flag = Arc::new(AtomicBool::new(false));
-        let stop_flag_inner = Arc::clone(&stop_flag);
+        let stop_flag_inner = Arc::clone(&self.rec_stop_requested);
         let rec_id = ViewportId::from_hash_of("rustyshot_floating_rec_bar");
 
         ctx.show_viewport_deferred(
@@ -732,9 +798,12 @@ impl RustyShotApp {
                 .with_title("RustyShot REC")
                 .with_decorations(false)
                 .with_always_on_top()
-                .with_inner_size([290.0, 40.0]),
+                .with_inner_size([300.0, 42.0]),
             move |rctx, _class| {
                 rctx.request_repaint_after(Duration::from_millis(250));
+                if rctx.input(|i| i.viewport().close_requested()) {
+                    stop_flag_inner.store(true, Ordering::Relaxed);
+                }
                 egui::CentralPanel::default()
                     .frame(
                         egui::Frame::none()
@@ -744,25 +813,31 @@ impl RustyShotApp {
                             .inner_margin(egui::Margin::symmetric(10.0, 6.0)),
                     )
                     .show(rctx, |ui| {
-                        let resp = ui.interact(ui.max_rect(), ui.id().with("drag"), Sense::drag());
-                        if resp.drag_started() {
-                            rctx.send_viewport_cmd(ViewportCommand::StartDrag);
-                        }
                         ui.horizontal_centered(|ui| {
-                            ui.label(
-                                RichText::new(format!(
-                                    "⏺ REC {:02}:{:02} · {}f · {}",
-                                    secs / 60,
-                                    secs % 60,
-                                    frames,
-                                    ext
-                                ))
-                                .color(Color32::from_rgb(254, 202, 202))
-                                .strong()
-                                .size(12.0),
+                            let drag_label = ui.add(
+                                egui::Label::new(
+                                    RichText::new(format!(
+                                        "⏺ REC {:02}:{:02} · {}f · {}",
+                                        secs / 60,
+                                        secs % 60,
+                                        frames,
+                                        ext
+                                    ))
+                                    .color(Color32::from_rgb(254, 202, 202))
+                                    .strong()
+                                    .size(12.0),
+                                )
+                                .sense(Sense::drag()),
                             );
+                            if drag_label.drag_started() {
+                                rctx.send_viewport_cmd(ViewportCommand::StartDrag);
+                            }
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                if ui.small_button("⏹ Stop").clicked() {
+                                let stop_btn = egui::Button::new(
+                                    RichText::new("⏹ Stop").color(Color32::WHITE).strong(),
+                                )
+                                .fill(Color32::from_rgb(220, 38, 38));
+                                if ui.add(stop_btn).clicked() {
                                     stop_flag_inner.store(true, Ordering::Relaxed);
                                 }
                             });
@@ -771,9 +846,6 @@ impl RustyShotApp {
             },
         );
 
-        if stop_flag.load(Ordering::Relaxed) {
-            self.stop_screen_recording();
-        }
         ctx.request_repaint_after(Duration::from_millis(250));
     }
 
@@ -789,7 +861,7 @@ impl RustyShotApp {
                             .color(Color32::from_rgb(56, 189, 248)),
                     );
                     ui.label(
-                        RichText::new("v0.3.11")
+                        RichText::new("v0.3.12")
                             .size(11.0)
                             .color(Color32::from_rgb(148, 163, 184)),
                     );
@@ -836,6 +908,81 @@ impl RustyShotApp {
                     });
                 });
             });
+
+        // Bottom Upload Progress & Status Bar
+        if let Some(banner) = self.upload_banner.clone() {
+            let (bg, border) = match &banner {
+                UploadBannerState::Uploading { .. } => (
+                    Color32::from_rgb(17, 34, 56),
+                    Color32::from_rgb(56, 189, 248),
+                ),
+                UploadBannerState::Success { .. } => (
+                    Color32::from_rgb(16, 46, 30),
+                    Color32::from_rgb(34, 197, 94),
+                ),
+                UploadBannerState::Error(_) => (
+                    Color32::from_rgb(56, 20, 24),
+                    Color32::from_rgb(239, 68, 68),
+                ),
+            };
+            egui::TopBottomPanel::bottom("rustyshot_upload_bar")
+                .frame(
+                    egui::Frame::none()
+                        .fill(bg)
+                        .stroke(Stroke::new(1.0, border))
+                        .inner_margin(egui::Margin::symmetric(12.0, 6.0)),
+                )
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| match &banner {
+                        UploadBannerState::Uploading { filename, .. } => {
+                            ui.spinner();
+                            ui.label(
+                                RichText::new(format!("Uploading {filename}..."))
+                                    .color(Color32::from_rgb(186, 230, 253))
+                                    .strong(),
+                            );
+                        }
+                        UploadBannerState::Success { message, url } => {
+                            ui.label(
+                                RichText::new(format!("✅ {message}"))
+                                    .color(Color32::from_rgb(187, 247, 208))
+                                    .strong(),
+                            );
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if ui.small_button("✖").clicked() {
+                                    self.upload_banner = None;
+                                }
+                                if let Some(u) = url {
+                                    if ui.small_button("🌐 Open").clicked() {
+                                        let _ = copy_text_to_clipboard(u);
+                                        ctx.open_url(egui::OpenUrl::new_tab(u));
+                                    }
+                                    if ui.small_button("📋 Copy URL").clicked() {
+                                        match copy_text_to_clipboard(u) {
+                                            Ok(()) => self.set_toast(format!("URL copied: {u}")),
+                                            Err(e) => {
+                                                self.set_toast(format!("Clipboard error: {e}"))
+                                            }
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                        UploadBannerState::Error(err) => {
+                            ui.label(
+                                RichText::new(format!("❌ {err}"))
+                                    .color(Color32::from_rgb(254, 202, 202))
+                                    .strong(),
+                            );
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if ui.small_button("✖").clicked() {
+                                    self.upload_banner = None;
+                                }
+                            });
+                        }
+                    });
+                });
+        }
 
         // Left Navigation Sidebar
         egui::SidePanel::left("rustyshot_sidebar")
@@ -983,7 +1130,8 @@ impl RustyShotApp {
                         }
                     });
                     ui.add_space(8.0);
-                    // Row 2: Recording, Color Picker, Paste/Open
+                    // Row 2: Record Full, Record Region, Color Picker, Paste/Open
+                    let card_w4 = ((ui.available_width() - 30.0) / 4.0).max(130.0);
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 10.0;
                         let rec_sub = format!(
@@ -994,10 +1142,10 @@ impl RustyShotApp {
                         );
                         if capture_card_btn(
                             ui,
-                            "🎬 Record Screen",
+                            "🎬 Record Full",
                             &rec_sub,
                             Color32::from_rgb(239, 68, 68),
-                            card_w,
+                            card_w4,
                         )
                         .clicked()
                         {
@@ -1005,10 +1153,21 @@ impl RustyShotApp {
                         }
                         if capture_card_btn(
                             ui,
+                            "✂ Record Region",
+                            "Select area & Rec",
+                            Color32::from_rgb(244, 63, 94),
+                            card_w4,
+                        )
+                        .clicked()
+                        {
+                            self.trigger_capture(ctx, TrayAction::CaptureRegion);
+                        }
+                        if capture_card_btn(
+                            ui,
                             "🎨 Color Picker",
                             "Pick pixel HEX/RGB",
                             Color32::from_rgb(245, 158, 11),
-                            card_w,
+                            card_w4,
                         )
                         .clicked()
                         {
@@ -1019,7 +1178,7 @@ impl RustyShotApp {
                             "🖼 Open / Paste",
                             "File or Ctrl+V",
                             Color32::from_rgb(34, 197, 94),
-                            card_w,
+                            card_w4,
                         )
                         .clicked()
                             && let Some(path) = rfd::FileDialog::new()
@@ -1049,6 +1208,7 @@ impl RustyShotApp {
                                 changed |= ui.checkbox(&mut self.config.after_capture_open_editor, "Open Editor").changed();
                                 changed |= ui.checkbox(&mut self.config.after_capture_auto_pin, "Pin").changed();
                                 changed |= ui.checkbox(&mut self.config.ftp.auto_upload, "Upload FTP").changed();
+                                changed |= ui.checkbox(&mut self.config.ftp.open_after_upload, "Open after upload").changed();
                                 if changed {
                                     let _ = self.storage.save_config(&self.config);
                                 }
@@ -1133,6 +1293,10 @@ impl RustyShotApp {
                         &mut self.config.ftp.auto_upload,
                         "Auto-upload after capture / recording",
                     );
+                    ui.checkbox(
+                        &mut self.config.ftp.open_after_upload,
+                        "Open public URL in browser after upload",
+                    );
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
                         ui.label("Protocol:");
@@ -1187,7 +1351,7 @@ impl RustyShotApp {
                             self.upload_rx = Some(rx);
                             self.ftp_test_status = Some("Testing FTP...".to_string());
                             std::thread::spawn(move || {
-                                let _ = tx.send(test_ftp_connection(&cfg));
+                                let _ = tx.send(test_ftp_connection(&cfg).map(|m| (m, None, None)));
                             });
                         }
                         if ui.button("💾 Save FTP Config").clicked() {
@@ -1281,17 +1445,150 @@ impl RustyShotApp {
 
                         ui.add_space(8.0);
                         ui.separator();
-                        ui.label(RichText::new("⌨ Global Hotkeys").strong());
-                        egui::Grid::new("hk_grid").num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
-                            ui.label("Region:");
-                            ui.text_edit_singleline(&mut self.config.region_hotkey);
-                            ui.end_row();
-                            ui.label("Fullscreen:");
-                            ui.text_edit_singleline(&mut self.config.fullscreen_hotkey);
-                            ui.end_row();
-                            ui.label("Record Toggle:");
-                            ui.text_edit_singleline(&mut self.config.record_hotkey);
-                            ui.end_row();
+                        ui.label(RichText::new("⌨ Global Hotkeys (Click to set)").strong());
+
+                        // Capture key press when listening for a new hotkey
+                        if let Some(target) = self.capturing_hotkey {
+                            let captured = ctx.input(|i| {
+                                for ev in &i.events {
+                                    if let egui::Event::Key {
+                                        key,
+                                        pressed: true,
+                                        modifiers,
+                                        ..
+                                    } = ev
+                                    {
+                                        if *key == Key::Escape {
+                                            return Some(None);
+                                        }
+                                        if let Some(key_name) = egui_key_to_hotkey_name(*key) {
+                                            let mut parts: Vec<&str> = Vec::new();
+                                            if modifiers.ctrl || modifiers.command {
+                                                parts.push("Ctrl");
+                                            }
+                                            if modifiers.alt {
+                                                parts.push("Alt");
+                                            }
+                                            if modifiers.shift {
+                                                parts.push("Shift");
+                                            }
+                                            parts.push(key_name);
+                                            return Some(Some(parts.join("+")));
+                                        }
+                                    }
+                                }
+                                None
+                            });
+                            #[cfg(target_os = "windows")]
+                            let captured = captured.or_else(|| {
+                                if is_win_printscreen_pressed() {
+                                    let mods = ctx.input(|i| i.modifiers);
+                                    let mut parts: Vec<&str> = Vec::new();
+                                    if mods.ctrl || mods.command {
+                                        parts.push("Ctrl");
+                                    }
+                                    if mods.alt {
+                                        parts.push("Alt");
+                                    }
+                                    if mods.shift {
+                                        parts.push("Shift");
+                                    }
+                                    parts.push("PrintScreen");
+                                    Some(Some(parts.join("+")))
+                                } else {
+                                    None
+                                }
+                            });
+                            if let Some(maybe_spec) = captured {
+                                self.capturing_hotkey = None;
+                                if let Some(spec) = maybe_spec {
+                                    match target {
+                                        HotkeyTarget::Region => self.config.region_hotkey = spec.clone(),
+                                        HotkeyTarget::Fullscreen => self.config.fullscreen_hotkey = spec.clone(),
+                                        HotkeyTarget::Record => self.config.record_hotkey = spec.clone(),
+                                    }
+                                    let _ = self.storage.save_config(&self.config);
+                                    if let Some(ref mut hk) = self.hotkeys {
+                                        self.hotkey_status = hk.reregister(
+                                            &self.config.region_hotkey,
+                                            &self.config.fullscreen_hotkey,
+                                            &self.config.record_hotkey,
+                                        );
+                                    }
+                                    self.set_toast(format!("Hotkey saved: {spec}"));
+                                }
+                            }
+                        }
+
+                        egui::Grid::new("hk_grid").num_columns(4).spacing([6.0, 6.0]).show(ui, |ui| {
+                            let rows = [
+                                (HotkeyTarget::Region, "Region:", "Ctrl+Shift+S"),
+                                (HotkeyTarget::Fullscreen, "Fullscreen:", "Ctrl+Shift+F"),
+                                (HotkeyTarget::Record, "Record Toggle:", "Ctrl+Shift+R"),
+                            ];
+                            for (target, label, default_spec) in rows {
+                                ui.label(label);
+                                let current = match target {
+                                    HotkeyTarget::Region => &self.config.region_hotkey,
+                                    HotkeyTarget::Fullscreen => &self.config.fullscreen_hotkey,
+                                    HotkeyTarget::Record => &self.config.record_hotkey,
+                                };
+                                let is_listening = self.capturing_hotkey == Some(target);
+                                let btn_text = if is_listening {
+                                    RichText::new("⌨ Press keys... (Esc cancel)")
+                                        .color(Color32::from_rgb(56, 189, 248))
+                                        .strong()
+                                } else {
+                                    RichText::new(format!("  {current}  "))
+                                        .monospace()
+                                        .strong()
+                                };
+                                let btn = egui::Button::new(btn_text)
+                                    .min_size(vec2(195.0, 26.0))
+                                    .fill(if is_listening {
+                                        Color32::from_rgb(17, 38, 62)
+                                    } else {
+                                        Color32::from_rgb(30, 38, 54)
+                                    });
+                                if ui.add(btn).clicked() {
+                                    self.capturing_hotkey = if is_listening { None } else { Some(target) };
+                                }
+                                if ui.small_button("PrtSc").on_hover_text("Assign single PrintScreen key").clicked() {
+                                    self.capturing_hotkey = None;
+                                    match target {
+                                        HotkeyTarget::Region => self.config.region_hotkey = "PrintScreen".to_string(),
+                                        HotkeyTarget::Fullscreen => self.config.fullscreen_hotkey = "PrintScreen".to_string(),
+                                        HotkeyTarget::Record => self.config.record_hotkey = "PrintScreen".to_string(),
+                                    }
+                                    let _ = self.storage.save_config(&self.config);
+                                    if let Some(ref mut hk) = self.hotkeys {
+                                        self.hotkey_status = hk.reregister(
+                                            &self.config.region_hotkey,
+                                            &self.config.fullscreen_hotkey,
+                                            &self.config.record_hotkey,
+                                        );
+                                    }
+                                    self.set_toast("Hotkey saved: PrintScreen");
+                                }
+                                if ui.small_button("↺ Reset").on_hover_text(format!("Reset to {default_spec}")).clicked() {
+                                    self.capturing_hotkey = None;
+                                    match target {
+                                        HotkeyTarget::Region => self.config.region_hotkey = default_spec.to_string(),
+                                        HotkeyTarget::Fullscreen => self.config.fullscreen_hotkey = default_spec.to_string(),
+                                        HotkeyTarget::Record => self.config.record_hotkey = default_spec.to_string(),
+                                    }
+                                    let _ = self.storage.save_config(&self.config);
+                                    if let Some(ref mut hk) = self.hotkeys {
+                                        self.hotkey_status = hk.reregister(
+                                            &self.config.region_hotkey,
+                                            &self.config.fullscreen_hotkey,
+                                            &self.config.record_hotkey,
+                                        );
+                                    }
+                                    self.set_toast(format!("Reset hotkey to {default_spec}"));
+                                }
+                                ui.end_row();
+                            }
                         });
                         ui.add_space(8.0);
                         if ui.button("💾 Save & Apply Settings").clicked() {
@@ -1305,6 +1602,55 @@ impl RustyShotApp {
                             }
                             self.set_toast("Settings saved");
                         }
+
+                        ui.add_space(16.0);
+                        ui.separator();
+                        ui.add_space(8.0);
+                        egui::Frame::none()
+                            .fill(Color32::from_rgb(22, 27, 38))
+                            .rounding(Rounding::same(8.0))
+                            .stroke(Stroke::new(1.0, Color32::from_rgb(42, 52, 72)))
+                            .inner_margin(egui::Margin::same(12.0))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        RichText::new("🦀 RustyShot")
+                                            .size(15.0)
+                                            .strong()
+                                            .color(Color32::from_rgb(226, 232, 240)),
+                                    );
+                                    ui.label(
+                                        RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
+                                            .size(12.0)
+                                            .color(Color32::from_rgb(56, 189, 248)),
+                                    );
+                                });
+                                ui.add_space(4.0);
+                                ui.label(
+                                    RichText::new(
+                                        "Lightweight cross-platform screenshot, annotation, screen recorder & SFTP/FTP uploader built with Rust.",
+                                    )
+                                    .size(11.5)
+                                    .color(Color32::from_rgb(148, 163, 184)),
+                                );
+                                ui.add_space(6.0);
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        RichText::new("Repository:")
+                                            .size(11.5)
+                                            .color(Color32::from_rgb(148, 163, 184)),
+                                    );
+                                    ui.hyperlink_to(
+                                        "github.com/longanhvn/rustyshot",
+                                        "https://github.com/longanhvn/rustyshot",
+                                    );
+                                    if ui.small_button("📦 Releases").clicked() {
+                                        ctx.open_url(egui::OpenUrl::new_tab(
+                                            "https://github.com/longanhvn/rustyshot/releases",
+                                        ));
+                                    }
+                                });
+                            });
                     });
                 }
             }
@@ -1388,6 +1734,8 @@ impl RustyShotApp {
         let mut pin_path: Option<PathBuf> = None;
         let mut ftp_path: Option<PathBuf> = None;
         let mut delete_id: Option<String> = None;
+        let mut copy_url: Option<String> = None;
+        let mut open_url: Option<String> = None;
 
         egui::ScrollArea::vertical().show(ui, |ui| {
             for rec in &filtered {
@@ -1400,18 +1748,29 @@ impl RustyShotApp {
                         ui.horizontal(|ui| {
                             if let Some(ref p) = rec.file_path {
                                 if !self.thumb_cache.contains_key(&rec.id)
-                                    && let Ok(img) = image::open(p)
+                                    && !self.thumb_loading.contains(&rec.id)
                                 {
-                                    let thumb = img.thumbnail(80, 48).to_rgba8();
-                                    let tex = Self::rgba_to_texture(
-                                        ctx,
-                                        &format!("thumb_{}", rec.id),
-                                        &thumb,
-                                    );
-                                    self.thumb_cache.insert(rec.id.clone(), tex);
+                                    self.thumb_loading.insert(rec.id.clone());
+                                    let tx = self.thumb_tx.clone();
+                                    let id_bg = rec.id.clone();
+                                    let p_bg = p.clone();
+                                    std::thread::spawn(move || {
+                                        let thumb = image::open(&p_bg)
+                                            .ok()
+                                            .map(|img| img.thumbnail(80, 48).to_rgba8());
+                                        let _ = tx.send((id_bg, thumb));
+                                    });
                                 }
                                 if let Some(tex) = self.thumb_cache.get(&rec.id) {
                                     ui.image((tex.id(), vec2(80.0, 48.0)));
+                                } else {
+                                    let (ph_rect, _) =
+                                        ui.allocate_exact_size(vec2(80.0, 48.0), Sense::hover());
+                                    ui.painter().rect_filled(
+                                        ph_rect,
+                                        Rounding::same(4.0),
+                                        Color32::from_rgb(28, 35, 48),
+                                    );
                                 }
                             }
 
@@ -1431,11 +1790,38 @@ impl RustyShotApp {
                                     .size(11.0)
                                     .color(Color32::from_rgb(148, 163, 184)),
                                 );
+                                if let Some(ref url) = rec.uploaded_url {
+                                    ui.label(
+                                        RichText::new(format!("✅ {url}"))
+                                            .size(10.5)
+                                            .color(Color32::from_rgb(74, 222, 128)),
+                                    );
+                                } else if let Some(UploadBannerState::Uploading { path: ref up_p, .. }) =
+                                    self.upload_banner
+                                    && rec.file_path.as_ref() == Some(up_p)
+                                {
+                                    ui.horizontal(|ui| {
+                                        ui.spinner();
+                                        ui.label(
+                                            RichText::new("Uploading...")
+                                                .size(10.5)
+                                                .color(Color32::from_rgb(56, 189, 248)),
+                                        );
+                                    });
+                                }
                             });
 
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 if ui.small_button("🗑").on_hover_text("Remove from history").clicked() {
                                     delete_id = Some(rec.id.clone());
+                                }
+                                if let Some(ref url) = rec.uploaded_url {
+                                    if ui.small_button("🌐 Open").on_hover_text(url.as_str()).clicked() {
+                                        open_url = Some(url.clone());
+                                    }
+                                    if ui.small_button("🔗 Link").on_hover_text("Copy uploaded URL").clicked() {
+                                        copy_url = Some(url.clone());
+                                    }
                                 }
                                 if let Some(ref p) = rec.file_path
                                     && p.exists()
@@ -1486,6 +1872,16 @@ impl RustyShotApp {
         }
         if let Some(p) = ftp_path {
             self.spawn_ftp_upload(p);
+        }
+        if let Some(u) = copy_url {
+            match copy_text_to_clipboard(&u) {
+                Ok(()) => self.set_toast(format!("URL copied: {u}")),
+                Err(e) => self.set_toast(format!("Clipboard error: {e}")),
+            }
+        }
+        if let Some(u) = open_url {
+            let _ = copy_text_to_clipboard(&u);
+            ctx.open_url(egui::OpenUrl::new_tab(u));
         }
         if let Some(id) = delete_id {
             self.config.recent_captures.retain(|r| r.id != id);
@@ -2447,7 +2843,7 @@ impl RustyShotApp {
         } else if do_save_as
             && let Some(ref base) = self.working_image
             && let Some(path) = rfd::FileDialog::new()
-                .set_file_name("RustyShot.png")
+                .set_file_name("rustyshot.png")
                 .add_filter("PNG", &["png"])
                 .add_filter("JPEG", &["jpg", "jpeg"])
                 .save_file()
@@ -2499,17 +2895,115 @@ impl eframe::App for RustyShotApp {
             ctx.request_repaint_after(Duration::from_millis(120));
         }
 
+        // Poll async thumbnail decoding
+        while let Ok((id, maybe_img)) = self.thumb_rx.try_recv() {
+            self.thumb_loading.remove(&id);
+            if let Some(thumb) = maybe_img {
+                let tex = Self::rgba_to_texture(ctx, &format!("thumb_{id}"), &thumb);
+                self.thumb_cache.insert(id, tex);
+            }
+        }
+        if !self.thumb_loading.is_empty() {
+            ctx.request_repaint_after(Duration::from_millis(60));
+        }
+
+        // Poll async image save
+        if self.save_rx.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(40));
+        }
+        if let Some(ref rx) = self.save_rx
+            && let Ok((res, trigger_upload)) = rx.try_recv()
+        {
+            self.save_rx = None;
+            match res {
+                Ok(p) => {
+                    self.set_toast(format!(
+                        "Saved {}",
+                        p.file_name().unwrap_or_default().to_string_lossy()
+                    ));
+                    if trigger_upload {
+                        self.spawn_ftp_upload(p);
+                    }
+                }
+                Err(e) => self.set_toast(format!("Save error: {e}")),
+            }
+        }
+
+        // Poll async recording finalization
+        if self.rec_stop_rx.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(80));
+        }
+        if let Some(ref rx) = self.rec_stop_rx
+            && let Ok(res) = rx.try_recv()
+        {
+            self.rec_stop_rx = None;
+            match res {
+                Ok(r) => {
+                    let record = CaptureRecord {
+                        id: Local::now().format("%Y%m%d%H%M%S%3f").to_string(),
+                        timestamp: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+                        width: r.width,
+                        height: r.height,
+                        file_path: Some(r.path.clone()),
+                        mode: format!("Video ({})", r.format.extension().to_uppercase()),
+                        uploaded_url: None,
+                    };
+                    self.config.recent_captures.insert(0, record);
+                    self.config.recent_captures.truncate(24);
+                    let _ = self.storage.save_config(&self.config);
+                    self.set_toast(format!(
+                        "Saved {} ({} frames)",
+                        r.path.file_name().unwrap_or_default().to_string_lossy(),
+                        r.frames
+                    ));
+                    if self.config.ftp.enabled && self.config.ftp.auto_upload {
+                        self.spawn_ftp_upload(r.path);
+                    }
+                }
+                Err(e) => self.set_toast(format!("Recording failed: {e}")),
+            }
+        }
+
         // Poll background FTP upload / test results
+        if self.upload_rx.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
         if let Some(ref rx) = self.upload_rx
             && let Ok(res) = rx.try_recv()
         {
             self.upload_rx = None;
             match res {
-                Ok(msg) => {
+                Ok((mut msg, maybe_url, maybe_path)) => {
+                    if let Some(ref url) = maybe_url {
+                        match copy_text_to_clipboard(url) {
+                            Ok(()) => msg = format!("Uploaded! URL copied: {url}"),
+                            Err(e) => msg = format!("Uploaded ({url}) · Clipboard error: {e}"),
+                        }
+                        if let Some(ref p) = maybe_path
+                            && let Some(rec) = self
+                                .config
+                                .recent_captures
+                                .iter_mut()
+                                .find(|r| r.file_path.as_ref() == Some(p))
+                        {
+                            rec.uploaded_url = Some(url.clone());
+                            let _ = self.storage.save_config(&self.config);
+                        }
+                        if self.config.ftp.open_after_upload {
+                            ctx.open_url(egui::OpenUrl::new_tab(url));
+                        }
+                    }
+                    if maybe_path.is_some() {
+                        self.upload_banner = Some(UploadBannerState::Success {
+                            message: msg.clone(),
+                            url: maybe_url,
+                        });
+                    }
                     self.ftp_test_status = Some(msg.clone());
                     self.set_toast(msg);
                 }
                 Err(err) => {
+                    self.upload_banner = Some(UploadBannerState::Error(err.clone()));
                     self.ftp_test_status = Some(err.clone());
                     self.set_toast(err);
                 }
@@ -2732,4 +3226,94 @@ fn parse_hex_rgb(hex: &str) -> Option<(u8, u8, u8)> {
     let g = u8::from_str_radix(&s[2..4], 16).ok()?;
     let b = u8::from_str_radix(&s[4..6], 16).ok()?;
     Some((r, g, b))
+}
+
+fn egui_key_to_hotkey_name(key: Key) -> Option<&'static str> {
+    Some(match key {
+        Key::A => "A",
+        Key::B => "B",
+        Key::C => "C",
+        Key::D => "D",
+        Key::E => "E",
+        Key::F => "F",
+        Key::G => "G",
+        Key::H => "H",
+        Key::I => "I",
+        Key::J => "J",
+        Key::K => "K",
+        Key::L => "L",
+        Key::M => "M",
+        Key::N => "N",
+        Key::O => "O",
+        Key::P => "P",
+        Key::Q => "Q",
+        Key::R => "R",
+        Key::S => "S",
+        Key::T => "T",
+        Key::U => "U",
+        Key::V => "V",
+        Key::W => "W",
+        Key::X => "X",
+        Key::Y => "Y",
+        Key::Z => "Z",
+        Key::Num0 => "0",
+        Key::Num1 => "1",
+        Key::Num2 => "2",
+        Key::Num3 => "3",
+        Key::Num4 => "4",
+        Key::Num5 => "5",
+        Key::Num6 => "6",
+        Key::Num7 => "7",
+        Key::Num8 => "8",
+        Key::Num9 => "9",
+        Key::F1 => "F1",
+        Key::F2 => "F2",
+        Key::F3 => "F3",
+        Key::F4 => "F4",
+        Key::F5 => "F5",
+        Key::F6 => "F6",
+        Key::F7 => "F7",
+        Key::F8 => "F8",
+        Key::F9 => "F9",
+        Key::F10 => "F10",
+        Key::F11 => "F11",
+        Key::F12 => "F12",
+        Key::Space => "Space",
+        Key::Tab => "Tab",
+        Key::Enter => "Enter",
+        Key::Backspace => "Backspace",
+        Key::Insert => "Insert",
+        Key::Delete => "Delete",
+        Key::Home => "Home",
+        Key::End => "End",
+        Key::PageUp => "PageUp",
+        Key::PageDown => "PageDown",
+        Key::ArrowUp => "ArrowUp",
+        Key::ArrowDown => "ArrowDown",
+        Key::ArrowLeft => "ArrowLeft",
+        Key::ArrowRight => "ArrowRight",
+        Key::Minus => "Minus",
+        Key::Equals => "Equal",
+        Key::OpenBracket => "BracketLeft",
+        Key::CloseBracket => "BracketRight",
+        Key::Backslash => "Backslash",
+        Key::Semicolon => "Semicolon",
+        Key::Quote => "Quote",
+        Key::Comma => "Comma",
+        Key::Period => "Period",
+        Key::Slash => "Slash",
+        Key::Backtick => "Backquote",
+        _ => return None,
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn is_win_printscreen_pressed() -> bool {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn GetAsyncKeyState(vkey: i32) -> i16;
+    }
+    const VK_SNAPSHOT: i32 = 0x2C;
+    // Bit 15 set means key is currently held down
+    (unsafe { GetAsyncKeyState(VK_SNAPSHOT) } & (0x8000u16 as i16)) != 0
 }

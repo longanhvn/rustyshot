@@ -305,6 +305,10 @@ pub fn upload_file_to_ftp(local_path: &Path, cfg: &FtpConfig) -> Result<FtpUploa
                     .write_all(&buf[..n])
                     .map_err(|e| format!("SFTP write failed: {e}"))?;
             }
+            remote_file
+                .flush()
+                .map_err(|e| format!("SFTP flush failed: {e}"))?;
+            drop(remote_file);
             Ok(FtpUploadResult {
                 remote_path: full_remote,
                 public_url,

@@ -2,6 +2,26 @@
 
 Tất cả các thay đổi đáng chú ý của **RustyShot** được ghi nhận tại đây.
 
+## [0.3.12] - 2026-11-25
+### Tính năng mới & Bảo mật
+- Thêm tùy chọn **Open after upload** (`After Capture` & `Upload & FTP`): tự động mở link Public URL trên trình duyệt ngay sau khi upload thành công.
+- **Đổi Hotkeys kiểu bấm-trực-tiếp (Click-to-Bind) & hỗ trợ 1 phím `PrtSc`**: trong `Settings → Global Hotkeys`, chỉ cần nhấp vào ô phím tắt rồi bấm tổ hợp phím mới hoặc 1 phím `PrtSc` (`PrintScreen`) là tự nhận, tự lưu và áp dụng ngay (kèm nút `PrtSc` & `↺ Reset`).
+- **Thêm mục `About RustyShot`** trong tab `Settings` hiển thị thông tin ứng dụng, phiên bản, đường dẫn repository GitHub và nút mở nhanh trang Releases.
+- **Hiển thị tiến trình & trạng thái Upload cố định ở viền dưới**: thanh trạng thái (`⏳ Uploading...` → `✅ Uploaded` kèm nút `📋 Copy URL` & `🌐 Open` hoặc `❌ Lỗi`) + spinner ngay trên từng mục trong lịch sử.
+- **Mã hóa mật khẩu FTP/SFTP bằng AES-256-GCM** trước khi lưu vào `data/RustyShot.json` (tự động nâng cấp mật khẩu cũ từ dạng văn bản thường sang `enc:v1:...`).
+- **Quy tắc tên file chữ thường 100%**: mọi file ảnh/video sau khi chụp hoặc quay đều dùng chữ thường (`rustyshot_...png`, `rustyshot_rec_...mp4`), không bao giờ viết hoa.
+
+### Tối ưu hiệu năng & Bất đồng bộ
+- **Lưu file ảnh bất đồng bộ & Nén PNG tốc độ cao (`CompressionType::Fast` + `FilterType::Sub`)**: chụp hoặc lưu ảnh không còn khựng UI thread; sau khi ghi file xong tự động đẩy sang luồng upload nếu bật `Auto-upload`.
+- **Dừng quay video bất đồng bộ**: bấm Stop tắt thanh nổi ngay và đóng gói MP4/GIF ở luồng nền, tránh treo giao diện khi quay video dài.
+- **Tải thumbnail bất đồng bộ**: danh sách `Recent Captures` & `History` giải mã ảnh thu nhỏ ở luồng nền, cuộn mượt mà ngay cả khi có nhiều ảnh độ phân giải cao.
+
+### Đã sửa
+- **Sửa lỗi nút `⏹ Stop` nhỏ trên thanh nổi khi quay video không bấm dừng được**: dùng cờ nguyên tử `rec_stop_requested` gắn cố định vào app thay vì tạo mới mỗi frame và bỏ vùng kéo đè lên nút Stop.
+- **Thêm nút `✂ Record Region` ngay trên màn hình chính (`Capture`)** bên cạnh **`🎬 Record Full`** để chọn quay toàn màn hình hoặc kéo chọn 1 vùng bất kỳ rồi quay (kèm khung viền đỏ trong suốt bao quanh vùng đang quay, bấm xuyên chuột được).
+- **Sửa lỗi copy URL & mở link sau khi upload trên Windows**: chuyển `copy_text_to_clipboard` về UI thread chính, gọi `flush()` trước khi đóng stream SFTP, và lưu link đã upload vào lịch sử (`Recent Captures` / `History`) kèm nút **🔗 Link** & **🌐 Open**.
+- **Nhúng tĩnh hoàn toàn thư viện C/C++ runtime (`libstdc++`, `libgcc`, `winpthread`, MSVC CRT `+crt-static`)** vào file `.exe`, khắc phục lỗi thiếu `libstdc++-6.dll` trên Windows 10/11 sạch.
+
 ## [0.3.11] - 2026-11-25
 ### Đã thêm / Cải thiện
 - Hỗ trợ **SFTP / SSH (Port 22)** bên cạnh **FTPS Explicit TLS** và **FTP thường** trong tab **Upload & FTP**.
