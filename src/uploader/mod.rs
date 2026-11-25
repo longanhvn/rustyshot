@@ -1,11 +1,14 @@
-use crate::storage::FtpConfig;
+use crate::storage::{FtpConfig, UploadProtocol};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme};
+use ssh2::Session;
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, Read, Write};
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 use suppaftp::types::FileType;
 use suppaftp::{RustlsConnector, RustlsFtpStream};
 
@@ -75,17 +78,32 @@ fn build_rustls_config(ignore_tls_errors: bool) -> Result<ClientConfig, String> 
     }
 }
 
-fn connect_and_login(cfg: &FtpConfig) -> Result<RustlsFtpStream, String> {
+fn connect_tcp_with_timeout(host: &str, port: u16, timeout: Duration) -> Result<TcpStream, String> {
+    let addr = format!("{host}:{port}");
+    let sock_addr = addr
+        .to_socket_addrs()
+        .map_err(|e| format!("Cannot resolve {addr}: {e}"))?
+        .next()
+        .ok_or_else(|| format!("No IP address found for {addr}"))?;
+    let stream = TcpStream::connect_timeout(&sock_addr, timeout)
+        .map_err(|e| format!("Connect to {addr} failed: {e}"))?;
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
+    Ok(stream)
+}
+
+fn connect_and_login_ftp(cfg: &FtpConfig) -> Result<RustlsFtpStream, String> {
     let host = cfg.host.trim();
     if host.is_empty() {
-        return Err("FTP host is empty".to_string());
+        return Err("Host is empty".to_string());
     }
     let port = if cfg.port == 0 { 21 } else { cfg.port };
-    let addr = format!("{host}:{port}");
-    let mut ftp = RustlsFtpStream::connect(&addr)
-        .map_err(|e| format!("FTP connect to {addr} failed: {e}"))?;
+    let tcp = connect_tcp_with_timeout(host, port, Duration::from_secs(10))?;
+    let mut ftp = RustlsFtpStream::connect_with_stream(tcp)
+        .map_err(|e| format!("FTP connect to {host}:{port} failed: {e}"))?;
+    ftp.set_passive_nat_workaround(true);
 
-    if cfg.ftps_explicit {
+    if matches!(cfg.protocol, UploadProtocol::FtpsExplicit) {
         let tls_cfg = build_rustls_config(cfg.ignore_tls_errors)?;
         let connector = RustlsConnector::from(Arc::new(tls_cfg));
         ftp = ftp
@@ -112,12 +130,10 @@ fn ensure_and_cwd(ftp: &mut RustlsFtpStream, remote_dir: &str, username: &str) -
         return Ok(());
     }
 
-    // 1. Try direct CWD first (works on non-chrooted servers or exact relative paths)
     if ftp.cwd(trimmed).is_ok() {
         return Ok(());
     }
 
-    // 2. If user is chrooted in /home/<username> (HestiaCP/cPanel), try stripping /home/<username>
     let user_prefix = format!("/home/{}", username.trim());
     let effective = if let Some(rest) = trimmed.strip_prefix(&user_prefix) {
         let rel = rest.trim_start_matches('/');
@@ -143,6 +159,71 @@ fn ensure_and_cwd(ftp: &mut RustlsFtpStream, remote_dir: &str, username: &str) -
     Ok(())
 }
 
+fn connect_sftp(cfg: &FtpConfig) -> Result<(Session, ssh2::Sftp), String> {
+    let host = cfg.host.trim();
+    if host.is_empty() {
+        return Err("Host is empty".to_string());
+    }
+    let port = if cfg.port == 0 { 22 } else { cfg.port };
+    let tcp = connect_tcp_with_timeout(host, port, Duration::from_secs(10))?;
+
+    let mut sess = Session::new().map_err(|e| format!("SSH session init failed: {e}"))?;
+    sess.set_tcp_stream(tcp);
+    sess.handshake()
+        .map_err(|e| format!("SSH handshake with {host}:{port} failed: {e}"))?;
+
+    let user = cfg.username.trim();
+    if user.is_empty() {
+        return Err("SFTP username is empty".to_string());
+    }
+    sess.userauth_password(user, &cfg.password)
+        .map_err(|e| format!("SFTP authentication failed for '{user}': {e}"))?;
+
+    if !sess.authenticated() {
+        return Err("SFTP authentication was not accepted".to_string());
+    }
+    let sftp = sess
+        .sftp()
+        .map_err(|e| format!("SFTP subsystem init failed: {e}"))?;
+    Ok((sess, sftp))
+}
+
+fn ensure_sftp_dir(sftp: &ssh2::Sftp, remote_dir: &str) -> Result<String, String> {
+    let trimmed = remote_dir.trim().trim_end_matches('/');
+    if trimmed.is_empty() || trimmed == "/" {
+        return Ok("/".to_string());
+    }
+
+    if sftp.stat(Path::new(trimmed)).is_ok() {
+        return Ok(trimmed.to_string());
+    }
+
+    let mut current = if trimmed.starts_with('/') {
+        String::new()
+    } else {
+        ".".to_string()
+    };
+
+    for seg in trimmed.split('/').filter(|s| !s.is_empty()) {
+        if current.is_empty() {
+            current = format!("/{seg}");
+        } else if current == "." {
+            current = seg.to_string();
+        } else {
+            current = format!("{current}/{seg}");
+        }
+        let p = Path::new(&current);
+        if sftp.stat(p).is_err() {
+            let _ = sftp.mkdir(p, 0o755);
+        }
+    }
+
+    if sftp.stat(Path::new(trimmed)).is_err() {
+        return Err(format!("SFTP remote directory unavailable: {trimmed}"));
+    }
+    Ok(trimmed.to_string())
+}
+
 pub fn build_public_url(prefix: &str, filename: &str) -> Option<String> {
     let p = prefix.trim();
     if p.is_empty() {
@@ -164,12 +245,25 @@ pub fn build_remote_path(remote_dir: &str, filename: &str) -> String {
 }
 
 pub fn test_ftp_connection(cfg: &FtpConfig) -> Result<String, String> {
-    let mut ftp = connect_and_login(cfg)?;
-    ensure_and_cwd(&mut ftp, &cfg.remote_dir, &cfg.username)?;
-    let pwd = ftp.pwd().unwrap_or_else(|_| cfg.remote_dir.clone());
-    let _ = ftp.quit();
-    let proto = if cfg.ftps_explicit { "FTPS" } else { "FTP" };
-    Ok(format!("Connected ({proto})! Dir: {pwd}"))
+    match cfg.protocol {
+        UploadProtocol::Sftp => {
+            let (_sess, sftp) = connect_sftp(cfg)?;
+            let dir = ensure_sftp_dir(&sftp, &cfg.remote_dir)?;
+            Ok(format!("Connected (SFTP)! Dir: {dir}"))
+        }
+        UploadProtocol::Ftp | UploadProtocol::FtpsExplicit => {
+            let mut ftp = connect_and_login_ftp(cfg)?;
+            ensure_and_cwd(&mut ftp, &cfg.remote_dir, &cfg.username)?;
+            let pwd = ftp.pwd().unwrap_or_else(|_| cfg.remote_dir.clone());
+            let _ = ftp.quit();
+            let proto = if cfg.protocol == UploadProtocol::FtpsExplicit {
+                "FTPS"
+            } else {
+                "FTP"
+            };
+            Ok(format!("Connected ({proto})! Dir: {pwd}"))
+        }
+    }
 }
 
 pub fn upload_file_to_ftp(local_path: &Path, cfg: &FtpConfig) -> Result<FtpUploadResult, String> {
@@ -181,21 +275,57 @@ pub fn upload_file_to_ftp(local_path: &Path, cfg: &FtpConfig) -> Result<FtpUploa
         .and_then(|s| s.to_str())
         .ok_or_else(|| "Invalid local filename".to_string())?;
 
-    let mut ftp = connect_and_login(cfg)?;
-    ensure_and_cwd(&mut ftp, &cfg.remote_dir, &cfg.username)?;
-
-    let file = File::open(local_path).map_err(|e| format!("Cannot open file: {e}"))?;
-    let mut reader = BufReader::new(file);
-    ftp.put_file(filename, &mut reader)
-        .map_err(|e| format!("FTP upload failed: {e}"))?;
-    let _ = ftp.quit();
-
     let remote_path = build_remote_path(&cfg.remote_dir, filename);
     let public_url = build_public_url(&cfg.public_url_prefix, filename);
-    Ok(FtpUploadResult {
-        remote_path,
-        public_url,
-    })
+
+    match cfg.protocol {
+        UploadProtocol::Sftp => {
+            let (_sess, sftp) = connect_sftp(cfg)?;
+            let dir = ensure_sftp_dir(&sftp, &cfg.remote_dir)?;
+            let full_remote = if dir == "/" {
+                format!("/{filename}")
+            } else {
+                format!("{dir}/{filename}")
+            };
+
+            let mut local_file =
+                File::open(local_path).map_err(|e| format!("Cannot open file: {e}"))?;
+            let mut remote_file = sftp
+                .create(Path::new(&full_remote))
+                .map_err(|e| format!("SFTP create '{full_remote}' failed: {e}"))?;
+            let mut buf = [0u8; 64 * 1024];
+            loop {
+                let n = local_file
+                    .read(&mut buf)
+                    .map_err(|e| format!("Read error: {e}"))?;
+                if n == 0 {
+                    break;
+                }
+                remote_file
+                    .write_all(&buf[..n])
+                    .map_err(|e| format!("SFTP write failed: {e}"))?;
+            }
+            Ok(FtpUploadResult {
+                remote_path: full_remote,
+                public_url,
+            })
+        }
+        UploadProtocol::Ftp | UploadProtocol::FtpsExplicit => {
+            let mut ftp = connect_and_login_ftp(cfg)?;
+            ensure_and_cwd(&mut ftp, &cfg.remote_dir, &cfg.username)?;
+
+            let file = File::open(local_path).map_err(|e| format!("Cannot open file: {e}"))?;
+            let mut reader = BufReader::new(file);
+            ftp.put_file(filename, &mut reader)
+                .map_err(|e| format!("FTP upload failed: {e}"))?;
+            let _ = ftp.quit();
+
+            Ok(FtpUploadResult {
+                remote_path,
+                public_url,
+            })
+        }
+    }
 }
 
 #[cfg(test)]

@@ -93,18 +93,81 @@ jobs:
             strip "target/${{ matrix.target }}/release/rustyshot" || true
             cp "target/${{ matrix.target }}/release/rustyshot" "dist/RustyShot-${TAG}-ubuntu-x86_64"
             chmod +x "dist/RustyShot-${TAG}-ubuntu-x86_64"
-          elif [[ "${{ matrix.target }}" == *"aarch64-apple-darwin"* ]]; then
+
+            # Build .deb package for double-click install on Ubuntu/Debian
+            DEB_ROOT="pkg-deb"
+            mkdir -p "${DEB_ROOT}/DEBIAN" "${DEB_ROOT}/usr/bin" "${DEB_ROOT}/usr/share/applications" "${DEB_ROOT}/usr/share/icons/hicolor/256x256/apps"
+            cp "target/${{ matrix.target }}/release/rustyshot" "${DEB_ROOT}/usr/bin/rustyshot"
+            chmod 755 "${DEB_ROOT}/usr/bin/rustyshot"
+            cp "assets/icon.png" "${DEB_ROOT}/usr/share/icons/hicolor/256x256/apps/rustyshot.png"
+            cat <<EOF > "${DEB_ROOT}/usr/share/applications/rustyshot.desktop"
+          [Desktop Entry]
+          Name=RustyShot
+          Comment=Screenshot, Screen Recorder & Annotation Tool
+          Exec=/usr/bin/rustyshot
+          Icon=rustyshot
+          Terminal=false
+          Type=Application
+          Categories=Utility;Graphics;
+          EOF
+            VER="${TAG#v}"
+            cat <<EOF > "${DEB_ROOT}/DEBIAN/control"
+          Package: rustyshot
+          Version: ${VER}
+          Section: utils
+          Priority: optional
+          Architecture: amd64
+          Depends: libgtk-3-0, libayatana-appindicator3-1 | libappindicator3-1, libxcb1, libxkbcommon0, libgbm1
+          Maintainer: longanhvn
+          Description: Fast, lightweight screenshot, screen recorder & annotation tool written in Rust
+          EOF
+            dpkg-deb --build "${DEB_ROOT}" "dist/RustyShot-${TAG}-ubuntu-amd64.deb"
+            rm -rf "${DEB_ROOT}"
+          elif [[ "${{ matrix.target }}" == *"apple-darwin"* ]]; then
             strip "target/${{ matrix.target }}/release/rustyshot" || true
-            cp "target/${{ matrix.target }}/release/rustyshot" "dist/RustyShot-${TAG}-macos-arm64"
-            chmod +x "dist/RustyShot-${TAG}-macos-arm64"
-            tar -czf "dist/RustyShot-${TAG}-macos-arm64.tar.gz" -C dist "RustyShot-${TAG}-macos-arm64"
-            rm -f "dist/RustyShot-${TAG}-macos-arm64"
-          elif [[ "${{ matrix.target }}" == *"x86_64-apple-darwin"* ]]; then
-            strip "target/${{ matrix.target }}/release/rustyshot" || true
-            cp "target/${{ matrix.target }}/release/rustyshot" "dist/RustyShot-${TAG}-macos-x86_64"
-            chmod +x "dist/RustyShot-${TAG}-macos-x86_64"
-            tar -czf "dist/RustyShot-${TAG}-macos-x86_64.tar.gz" -C dist "RustyShot-${TAG}-macos-x86_64"
-            rm -f "dist/RustyShot-${TAG}-macos-x86_64"
+            if [[ "${{ matrix.target }}" == *"aarch64"* ]]; then
+              ARCH_LABEL="macos-arm64"
+            else
+              ARCH_LABEL="macos-x86_64"
+            fi
+            APP_DIR="dist/RustyShot.app"
+            mkdir -p "${APP_DIR}/Contents/MacOS" "${APP_DIR}/Contents/Resources"
+            cp "target/${{ matrix.target }}/release/rustyshot" "${APP_DIR}/Contents/MacOS/RustyShot"
+            chmod +x "${APP_DIR}/Contents/MacOS/RustyShot"
+
+            # Convert assets/icon.png into macOS AppIcon.icns
+            mkdir -p AppIcon.iconset
+            for sz in 16 32 128 256; do
+              sips -z ${sz} ${sz} assets/icon.png --out "AppIcon.iconset/icon_${sz}x${sz}.png" >/dev/null
+              sz2=$((sz * 2))
+              sips -z ${sz2} ${sz2} assets/icon.png --out "AppIcon.iconset/icon_${sz}x${sz}@2x.png" >/dev/null
+            done
+            iconutil -c icns AppIcon.iconset -o "${APP_DIR}/Contents/Resources/AppIcon.icns"
+            rm -rf AppIcon.iconset
+
+            VER="${TAG#v}"
+            cat <<EOF > "${APP_DIR}/Contents/Info.plist"
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>RustyShot</string>
+            <key>CFBundleDisplayName</key><string>RustyShot</string>
+            <key>CFBundleIdentifier</key><string>io.github.longanhvn.rustyshot</string>
+            <key>CFBundleVersion</key><string>${VER}</string>
+            <key>CFBundleShortVersionString</key><string>${VER}</string>
+            <key>CFBundleExecutable</key><string>RustyShot</string>
+            <key>CFBundleIconFile</key><string>AppIcon</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>NSHighResolutionCapable</key><true/>
+            <key>LSUIElement</key><false/>
+          </dict>
+          </plist>
+          EOF
+
+            # Create clickable .dmg disk image (and .zip of .app)
+            hdiutil create -volname "RustyShot ${TAG}" -srcfolder "${APP_DIR}" -ov -format UDZO "dist/RustyShot-${TAG}-${ARCH_LABEL}.dmg"
+            rm -rf "${APP_DIR}"
           fi
 
       - name: Upload build artifact
@@ -137,11 +200,11 @@ jobs:
 
           Phần mềm chụp ảnh, quay màn hình và chú thích đa nền tảng viết bằng Rust, gọn nhẹ, 100% portable.
 
-          ## Danh sách bản build đa nền tảng
-          - **Windows (x64):** \`RustyShot-${TAG}-windows-x86_64.exe\`
-          - **Ubuntu / Linux (x64):** \`RustyShot-${TAG}-ubuntu-x86_64\`
-          - **macOS Apple Silicon (arm64):** \`RustyShot-${TAG}-macos-arm64.tar.gz\`
-          - **macOS Intel (x64):** \`RustyShot-${TAG}-macos-x86_64.tar.gz\`
+          ## Danh sách bản cài đặt & chạy trực tiếp
+          - **Windows (x64):** \`RustyShot-${TAG}-windows-x86_64.exe\` *(bấm đúp chạy ngay)*
+          - **Ubuntu / Debian (x64):** \`RustyShot-${TAG}-ubuntu-amd64.deb\` *(bấm đúp cài có sẵn icon)* hoặc \`RustyShot-${TAG}-ubuntu-x86_64\` *(portable)*
+          - **macOS Apple Silicon (M1/M2/M3/M4):** \`RustyShot-${TAG}-macos-arm64.dmg\` *(kéo \`RustyShot.app\` vào Applications)*
+          - **macOS Intel (x64):** \`RustyShot-${TAG}-macos-x86_64.dmg\` *(kéo \`RustyShot.app\` vào Applications)*
 
           ## Chi tiết thay đổi (CHANGELOG)
           EOF

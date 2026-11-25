@@ -10,7 +10,8 @@ use crate::editor::{
 };
 use crate::recorder::{RecordingHandle, start_recording};
 use crate::storage::{
-    CaptureRecord, ImageFormatChoice, RustyShotConfig, StorageManager, VideoFormatChoice,
+    CaptureRecord, ImageFormatChoice, RustyShotConfig, StorageManager, UploadProtocol,
+    VideoFormatChoice,
 };
 use crate::tray::{
     HotkeyController, TrayAction, TrayController, poll_background_tray_and_hotkeys,
@@ -788,7 +789,7 @@ impl RustyShotApp {
                             .color(Color32::from_rgb(56, 189, 248)),
                     );
                     ui.label(
-                        RichText::new("v0.3.10")
+                        RichText::new("v0.3.11")
                             .size(11.0)
                             .color(Color32::from_rgb(148, 163, 184)),
                     );
@@ -1127,15 +1128,32 @@ impl RustyShotApp {
                         self.spawn_ftp_upload(path);
                     }
                     ui.add_space(8.0);
-                    ui.checkbox(&mut self.config.ftp.enabled, "Enable FTP Upload");
+                    ui.checkbox(&mut self.config.ftp.enabled, "Enable Remote Upload (SFTP / FTP)");
                     ui.checkbox(
                         &mut self.config.ftp.auto_upload,
                         "Auto-upload after capture / recording",
                     );
+                    ui.add_space(4.0);
                     ui.horizontal(|ui| {
-                        ui.checkbox(&mut self.config.ftp.ftps_explicit, "🔒 FTPS (Explicit TLS)");
-                        ui.checkbox(&mut self.config.ftp.ignore_tls_errors, "Accept self-signed certs");
+                        ui.label("Protocol:");
+                        for (proto, default_port) in [
+                            (UploadProtocol::Sftp, 22u16),
+                            (UploadProtocol::FtpsExplicit, 21u16),
+                            (UploadProtocol::Ftp, 21u16),
+                        ] {
+                            if ui
+                                .selectable_label(self.config.ftp.protocol == proto, proto.label())
+                                .clicked()
+                            {
+                                self.config.ftp.protocol = proto;
+                                self.config.ftp.port = default_port;
+                                self.config.ftp.ftps_explicit = proto == UploadProtocol::FtpsExplicit;
+                            }
+                        }
                     });
+                    if self.config.ftp.protocol == UploadProtocol::FtpsExplicit {
+                        ui.checkbox(&mut self.config.ftp.ignore_tls_errors, "Accept self-signed TLS certs");
+                    }
                     ui.add_space(6.0);
                     egui::Grid::new("ftp_grid_tab").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
                         ui.label("Host:");

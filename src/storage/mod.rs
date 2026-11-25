@@ -53,11 +53,30 @@ fn default_true() -> bool {
     true
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum UploadProtocol {
+    Ftp,
+    #[default]
+    FtpsExplicit,
+    Sftp,
+}
+
+impl UploadProtocol {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Ftp => "FTP (Port 21)",
+            Self::FtpsExplicit => "FTPS Explicit TLS (Port 21)",
+            Self::Sftp => "SFTP / SSH (Port 22)",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FtpConfig {
     pub enabled: bool,
     pub auto_upload: bool,
+    pub protocol: UploadProtocol,
     #[serde(default = "default_true")]
     pub ftps_explicit: bool,
     #[serde(default = "default_true")]
@@ -75,10 +94,11 @@ impl Default for FtpConfig {
         Self {
             enabled: false,
             auto_upload: false,
+            protocol: UploadProtocol::Sftp,
             ftps_explicit: true,
             ignore_tls_errors: true,
             host: String::new(),
-            port: 21,
+            port: 22,
             username: "anonymous".to_string(),
             password: String::new(),
             remote_dir: "/".to_string(),

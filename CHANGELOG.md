@@ -2,6 +2,11 @@
 
 Tất cả các thay đổi đáng chú ý của **RustyShot** được ghi nhận tại đây.
 
+## [0.3.11] - 2026-11-25
+### Đã thêm / Cải thiện
+- Hỗ trợ **SFTP / SSH (Port 22)** bên cạnh **FTPS Explicit TLS** và **FTP thường** trong tab **Upload & FTP**.
+- Thêm timeout kết nối TCP rõ ràng (10s) và bật `passive_nat_workaround` cho FTP/FTPS.
+
 ## [0.3.10] - 2026-11-25
 ### Đã thêm / Thay đổi
 - **Tích hợp sẵn bộ mã hóa video MP4 (H.264)** ngay bên trong ứng dụng (`openh264` + `mp4`), quay màn hình MP4 trực tiếp mà **không cần cài đặt `ffmpeg` / `ffmpeg.exe` ngoài**.

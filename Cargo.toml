@@ -1,6 +1,6 @@
 [package]
 name = "rustyshot"
-version = "0.3.10"
+version = "0.3.11"
 edition = "2024"
 description = "Fast, lightweight, cross-platform screenshot, screen recorder & annotation tool written in pure Rust"
 license = "MIT"
@@ -23,6 +23,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 webpki-roots = "0.26"
 openh264 = "0.9"
 mp4 = "0.14"
+ssh2 = { version = "0.9", features = ["vendored-openssl"] }
 
 [build-dependencies]
 winresource = "0.1"
