@@ -790,7 +790,7 @@ impl RustyShotApp {
                             .color(Color32::from_rgb(56, 189, 248)),
                     );
                     ui.label(
-                        RichText::new("v0.3.7")
+                        RichText::new("v0.3.8")
                             .size(11.0)
                             .color(Color32::from_rgb(148, 163, 184)),
                     );
@@ -2115,10 +2115,15 @@ impl RustyShotApp {
         }
 
         egui::TopBottomPanel::top("editor_toolbar")
-            .exact_height(44.0)
+            .frame(
+                egui::Frame::side_top_panel(&ctx.style())
+                    .inner_margin(egui::Margin::symmetric(10.0, 8.0)),
+            )
             .show(ctx, |ui| {
-                ui.horizontal_centered(|ui| {
-                    if ui.button("⬅ Back").clicked() {
+                ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+                ui.spacing_mut().button_padding = vec2(8.0, 5.0);
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button(RichText::new("⬅ Back").size(13.5)).clicked() {
                         go_back = true;
                     }
                     ui.separator();
@@ -2136,7 +2141,10 @@ impl RustyShotApp {
                     ] {
                         let active = self.active_tool == tool;
                         if ui
-                            .selectable_label(active, format!("{} {}", tool.icon(), tool.label()))
+                            .selectable_label(
+                                active,
+                                RichText::new(format!("{} {}", tool.icon(), tool.label())).size(13.5),
+                            )
                             .clicked()
                         {
                             self.active_tool = tool;
@@ -2145,10 +2153,10 @@ impl RustyShotApp {
                     ui.separator();
                     for col in PALETTE_COLORS {
                         let is_sel = self.active_color == col;
-                        let (r, resp) = ui.allocate_exact_size(vec2(15.0, 15.0), Sense::click());
-                        ui.painter().circle_filled(r.center(), 6.0, col);
+                        let (r, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
+                        ui.painter().circle_filled(r.center(), 7.5, col);
                         if is_sel {
-                            ui.painter().circle_stroke(r.center(), 7.5, Stroke::new(1.5, Color32::WHITE));
+                            ui.painter().circle_stroke(r.center(), 9.0, Stroke::new(1.8, Color32::WHITE));
                         }
                         if resp.clicked() {
                             self.active_color = col;
@@ -2157,51 +2165,53 @@ impl RustyShotApp {
                     ui.separator();
                     ui.add(egui::Slider::new(&mut self.stroke_width, 1.5..=10.0).show_value(false))
                         .on_hover_text("Stroke width");
-                    if ui.button("↩").on_hover_text("Undo (Ctrl+Z)").clicked() {
+                    if ui.button(RichText::new("↩").size(14.0)).on_hover_text("Undo (Ctrl+Z)").clicked() {
                         self.history.undo();
                     }
-                    if ui.button("↪").on_hover_text("Redo (Ctrl+Y)").clicked() {
+                    if ui.button(RichText::new("↪").size(14.0)).on_hover_text("Redo (Ctrl+Y)").clicked() {
                         self.history.redo();
                     }
                     if !self.history.items.is_empty()
-                        && ui.button("🧹").on_hover_text("Clear annotations").clicked()
+                        && ui.button(RichText::new("🧹").size(14.0)).on_hover_text("Clear annotations").clicked()
                     {
                         self.history.clear();
                     }
-
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.button("💾 Save As...").clicked() {
-                            do_save_as = true;
-                        }
-                        if ui.button("💾 Save").clicked() {
-                            do_save = true;
-                        }
-                        if ui.button("📌 Pin").clicked() {
-                            do_pin = true;
-                        }
-                        if ui.button("📋 Copy").clicked() {
-                            do_copy = true;
-                        }
-                    });
+                    ui.separator();
+                    if ui.button(RichText::new("📋 Copy").size(13.5)).clicked() {
+                        do_copy = true;
+                    }
+                    if ui.button(RichText::new("📌 Pin").size(13.5)).clicked() {
+                        do_pin = true;
+                    }
+                    if ui.button(RichText::new("💾 Save").size(13.5)).clicked() {
+                        do_save = true;
+                    }
+                    if ui.button(RichText::new("💾 Save As...").size(13.5)).clicked() {
+                        do_save_as = true;
+                    }
                 });
             });
 
         // Secondary Editor Bar: Image Transforms (Crop, Rotate, Flip) + Zoom
         egui::TopBottomPanel::top("editor_transform_bar")
-            .exact_height(32.0)
+            .frame(
+                egui::Frame::side_top_panel(&ctx.style())
+                    .inner_margin(egui::Margin::symmetric(10.0, 5.0)),
+            )
             .show(ctx, |ui| {
-                ui.horizontal_centered(|ui| {
-                    ui.label(RichText::new("Image:").size(11.5).color(Color32::from_rgb(148, 163, 184)));
-                    if ui.small_button("↺ 90°").on_hover_text("Rotate 90° CCW").clicked() {
+                ui.spacing_mut().item_spacing = vec2(6.0, 5.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new("Image:").size(12.5).color(Color32::from_rgb(148, 163, 184)));
+                    if ui.button(RichText::new("↺ 90°").size(12.5)).on_hover_text("Rotate 90° CCW").clicked() {
                         do_rotate_ccw = true;
                     }
-                    if ui.small_button("↻ 90°").on_hover_text("Rotate 90° CW").clicked() {
+                    if ui.button(RichText::new("↻ 90°").size(12.5)).on_hover_text("Rotate 90° CW").clicked() {
                         do_rotate_cw = true;
                     }
-                    if ui.small_button("⇄ Flip H").clicked() {
+                    if ui.button(RichText::new("⇄ Flip H").size(12.5)).clicked() {
                         do_flip_h = true;
                     }
-                    if ui.small_button("⇅ Flip V").clicked() {
+                    if ui.button(RichText::new("⇅ Flip V").size(12.5)).clicked() {
                         do_flip_v = true;
                     }
                     if let Some(cr) = self.editor_crop_rect
@@ -2209,35 +2219,34 @@ impl RustyShotApp {
                         && cr.height() >= 4.0
                     {
                         ui.separator();
-                        if ui.small_button("✂ Apply Crop").clicked() {
+                        if ui.button(RichText::new("✂ Apply Crop").size(12.5)).clicked() {
                             do_apply_crop = true;
                         }
-                        if ui.small_button("✖ Clear Crop").clicked() {
+                        if ui.button(RichText::new("✖ Clear Crop").size(12.5)).clicked() {
                             self.editor_crop_rect = None;
                         }
                     }
 
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.small_button("Fit").clicked() {
-                            do_fit_zoom = true;
-                        }
-                        if ui.small_button("+").clicked() {
-                            self.editor_zoom = (self.editor_zoom + 0.15).min(4.0);
-                        }
-                        if ui.small_button(format!("{}%", (self.editor_zoom * 100.0).round() as u32)).clicked() {
-                            self.editor_zoom = 1.0;
-                        }
-                        if ui.small_button("-").clicked() {
-                            self.editor_zoom = (self.editor_zoom - 0.15).max(0.2);
-                        }
-                        if let Some(ref img) = self.working_image {
-                            ui.label(
-                                RichText::new(format!("{} × {} px", img.width(), img.height()))
-                                    .size(11.0)
-                                    .color(Color32::from_rgb(148, 163, 184)),
-                            );
-                        }
-                    });
+                    ui.separator();
+                    if let Some(ref img) = self.working_image {
+                        ui.label(
+                            RichText::new(format!("{} × {} px", img.width(), img.height()))
+                                .size(12.0)
+                                .color(Color32::from_rgb(148, 163, 184)),
+                        );
+                    }
+                    if ui.button(RichText::new("-").size(12.5)).clicked() {
+                        self.editor_zoom = (self.editor_zoom - 0.15).max(0.2);
+                    }
+                    if ui.button(RichText::new(format!("{}%", (self.editor_zoom * 100.0).round() as u32)).size(12.5)).clicked() {
+                        self.editor_zoom = 1.0;
+                    }
+                    if ui.button(RichText::new("+").size(12.5)).clicked() {
+                        self.editor_zoom = (self.editor_zoom + 0.15).min(4.0);
+                    }
+                    if ui.button(RichText::new("Fit").size(12.5)).clicked() {
+                        do_fit_zoom = true;
+                    }
                 });
             });
 

@@ -51,7 +51,7 @@ fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_app_id("rustyshot")
-            .with_title("RustyShot v0.3.7 - Cross-Platform Screenshot, Recorder & Annotation")
+            .with_title("RustyShot v0.3.8 - Cross-Platform Screenshot, Recorder & Annotation")
             .with_inner_size([860.0, 560.0])
             .with_min_inner_size([720.0, 460.0])
             .with_icon(app_icon),

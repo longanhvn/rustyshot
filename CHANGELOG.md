@@ -4,6 +4,10 @@ Tất cả các thay đổi đáng chú ý của **RustyShot** được ghi nh�
 
 **Tác giả:** Long kakaka (longanhvn)
 
+## [0.3.8] - 2026-11-25
+### Đã cải thiện
+- Nâng cấp thanh công cụ trong **Editor**: chuyển sang bố cục tự động xuống dòng (`horizontal_wrapped`) để không bị tràn/cắt nút khi cửa sổ nhỏ, đồng thời tăng kích thước nút, chữ (`13.5pt`) và chấm màu (`18×18`) giúp thao tác dễ hơn.
+
 ## [0.3.7] - 2026-11-25
 ### Đã cải thiện
 - Chuyển thanh công cụ nổi sau khi chọn vùng chụp từ cạnh dưới lên **cạnh trên giữa màn hình** (`CENTER_TOP`).
