@@ -7,7 +7,6 @@ fn main() {
         res.set_icon("assets/icon.ico");
         res.set("ProductName", "RustyShot");
         res.set("FileDescription", "RustyShot - Screenshot, Recorder & Annotation");
-        res.set("LegalCopyright", "Long kakaka (longanhvn)");
         if let Err(e) = res.compile() {
             println!("cargo:warning=winresource compile failed: {e}");
         }

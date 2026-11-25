@@ -8,7 +8,7 @@ use crate::editor::{
     AnnotationHistory, AnnotationItem, PALETTE_COLORS, ToolKind, paint_annotations_egui,
     render_annotations_to_image,
 };
-use crate::recorder::{RecordingHandle, detect_ffmpeg_path, start_recording};
+use crate::recorder::{RecordingHandle, start_recording};
 use crate::storage::{
     CaptureRecord, ImageFormatChoice, RustyShotConfig, StorageManager, VideoFormatChoice,
 };
@@ -147,7 +147,6 @@ pub struct RustyShotApp {
 
     // Screen recorder & FTP background tasks
     active_recording: Option<RecordingHandle>,
-    ffmpeg_available: bool,
     upload_rx: Option<mpsc::Receiver<Result<String, String>>>,
     ftp_test_status: Option<String>,
 
@@ -273,7 +272,6 @@ impl RustyShotApp {
             pinned_shots: Vec::new(),
             next_pin_id: 1,
             active_recording: None,
-            ffmpeg_available: detect_ffmpeg_path().is_some(),
             upload_rx: None,
             ftp_test_status: None,
             selection_rect: None,
@@ -790,7 +788,7 @@ impl RustyShotApp {
                             .color(Color32::from_rgb(56, 189, 248)),
                     );
                     ui.label(
-                        RichText::new("v0.3.9")
+                        RichText::new("v0.3.10")
                             .size(11.0)
                             .color(Color32::from_rgb(148, 163, 184)),
                     );
@@ -1258,13 +1256,9 @@ impl RustyShotApp {
                         });
                         ui.add(egui::Slider::new(&mut self.config.video_fps, 5..=30).text("FPS"));
                         ui.label(
-                            RichText::new(if self.ffmpeg_available {
-                                "FFmpeg: Detected (MP4 ready)"
-                            } else {
-                                "FFmpeg: Not found (GIF works built-in; place ffmpeg next to exe for MP4)"
-                            })
-                            .size(11.0)
-                            .color(Color32::from_rgb(148, 163, 184)),
+                            RichText::new("Encoder: Built-in H.264 (MP4) & GIF ready")
+                                .size(11.0)
+                                .color(Color32::from_rgb(34, 197, 94)),
                         );
 
                         ui.add_space(8.0);

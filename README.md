@@ -6,8 +6,6 @@
 
 **RustyShot** là phần mềm chụp ảnh, quay màn hình và chú thích đa nền tảng (Windows, Linux X11/Wayland, macOS) viết bằng **Rust**, gọn nhẹ, 100% portable (chỉ 1 file thực thi duy nhất, không cần cài đặt).
 
-**Tác giả:** Long kakaka (longanhvn)
-
 ## Giao diện ứng dụng
 
 ![RustyShot Dashboard](docs/screenshots/rustyshot-dashboard.png)
@@ -23,8 +21,8 @@
   - Hỗ trợ Undo/Redo, Zoom (`-` / `100%` / `+` / `Fit` / `Ctrl+Cuộn`), Xoay 90°, Lật ngang/dọc.
 - **Ghim ảnh nổi (Pinned Shot):**
   - Ghim ảnh chụp lên trên các cửa sổ khác, hỗ trợ phóng to/thu nhỏ và chỉnh độ mờ (Opacity).
-- **Quay màn hình (GIF / MP4):**
-  - Phím tắt `Ctrl+Shift+R`, thanh điều khiển nổi khi đang quay.
+- **Quay màn hình (GIF / MP4 tích hợp sẵn):**
+  - Phím tắt `Ctrl+Shift+R`, thanh điều khiển nổi khi đang quay, tích hợp sẵn bộ mã hóa H.264/MP4 & GIF ngay trong app (không cần cài `ffmpeg` ngoài).
 - **Công cụ tiện ích & Upload:**
   - **Color Picker:** Lấy mã màu trên màn hình, tự động copy mã HEX và lưu bảng màu gần đây.
   - **FTP / FTPS Upload:** Hỗ trợ FTP thường và **FTPS (Explicit TLS)**, chấp nhận chứng chỉ tự ký, tự động upload sau khi chụp và copy link công khai.

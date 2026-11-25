@@ -2,7 +2,10 @@
 
 Tất cả các thay đổi đáng chú ý của **RustyShot** được ghi nhận tại đây.
 
-**Tác giả:** Long kakaka (longanhvn)
+## [0.3.10] - 2026-11-25
+### Đã thêm / Thay đổi
+- **Tích hợp sẵn bộ mã hóa video MP4 (H.264)** ngay bên trong ứng dụng (`openh264` + `mp4`), quay màn hình MP4 trực tiếp mà **không cần cài đặt `ffmpeg` / `ffmpeg.exe` ngoài**.
+- Gỡ bỏ dòng thông tin tác giả khỏi tài liệu và metadata phát hành.
 
 ## [0.3.9] - 2026-11-25
 ### Đã thêm

@@ -43,8 +43,8 @@ impl VideoFormatChoice {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Mp4 => "MP4 (H.264 via FFmpeg)",
-            Self::Gif => "GIF (Built-in, No FFmpeg)",
+            Self::Mp4 => "MP4 (H.264 Built-in)",
+            Self::Gif => "GIF (Built-in)",
         }
     }
 }

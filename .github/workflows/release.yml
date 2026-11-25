@@ -132,8 +132,6 @@ jobs:
           cat <<EOF > release_notes.md
           # RustyShot ${TAG}
 
-          **Tác giả:** Long kakaka (longanhvn)
-
           Phần mềm chụp ảnh, quay màn hình và chú thích đa nền tảng viết bằng Rust, gọn nhẹ, 100% portable.
 
           ## Danh sách bản build đa nền tảng
