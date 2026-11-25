@@ -4,6 +4,11 @@ Tất cả các thay đổi đáng chú ý của **RustyShot** được ghi nh�
 
 **Tác giả:** Long kakaka (longanhvn)
 
+## [0.3.7] - 2026-11-25
+### Đã cải thiện
+- Chuyển thanh công cụ nổi sau khi chọn vùng chụp từ cạnh dưới lên **cạnh trên giữa màn hình** (`CENTER_TOP`).
+- Phóng to kích thước thanh công cụ nổi: tăng lề, khoảng cách nút, cỡ chữ/icon (`14.5–15pt`) và chấm chọn màu (`20×20`) để dễ thao tác hơn.
+
 ## [0.3.6] - 2026-11-25
 ### Đã thêm / Sửa lỗi
 - Hỗ trợ **FTPS (Explicit TLS)** thuần Rust (`suppaftp` + `rustls`), giải quyết lỗi không kết nối/upload được với các server yêu cầu `AUTH TLS`.

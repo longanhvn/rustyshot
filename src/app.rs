@@ -790,7 +790,7 @@ impl RustyShotApp {
                             .color(Color32::from_rgb(56, 189, 248)),
                     );
                     ui.label(
-                        RichText::new("v0.3.6")
+                        RichText::new("v0.3.7")
                             .size(11.0)
                             .color(Color32::from_rgb(148, 163, 184)),
                     );
@@ -1940,15 +1940,17 @@ impl RustyShotApp {
             let mut do_cancel = false;
 
             egui::Area::new(egui::Id::new("overlay_toolbar"))
-                .anchor(Align2::CENTER_BOTTOM, vec2(0.0, -18.0))
+                .anchor(Align2::CENTER_TOP, vec2(0.0, 18.0))
                 .order(egui::Order::Foreground)
                 .show(ctx, |ui| {
                     egui::Frame::none()
                         .fill(Color32::from_rgb(18, 24, 38))
-                        .stroke(Stroke::new(1.0, Color32::from_rgb(56, 189, 248)))
-                        .rounding(Rounding::same(8.0))
-                        .inner_margin(egui::Margin::symmetric(10.0, 6.0))
+                        .stroke(Stroke::new(1.5, Color32::from_rgb(56, 189, 248)))
+                        .rounding(Rounding::same(10.0))
+                        .inner_margin(egui::Margin::symmetric(14.0, 10.0))
                         .show(ui, |ui| {
+                            ui.spacing_mut().item_spacing = vec2(7.0, 6.0);
+                            ui.spacing_mut().button_padding = vec2(9.0, 6.0);
                             ui.horizontal(|ui| {
                                 for tool in [
                                     ToolKind::Select,
@@ -1964,7 +1966,10 @@ impl RustyShotApp {
                                 ] {
                                     let active = self.active_tool == tool;
                                     if ui
-                                        .selectable_label(active, tool.icon())
+                                        .selectable_label(
+                                            active,
+                                            RichText::new(tool.icon()).size(15.0),
+                                        )
                                         .on_hover_text(tool.label())
                                         .clicked()
                                     {
@@ -1974,39 +1979,39 @@ impl RustyShotApp {
                                 ui.separator();
                                 for col in PALETTE_COLORS {
                                     let is_sel = self.active_color == col;
-                                    let (r, resp) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::click());
-                                    ui.painter().circle_filled(r.center(), 6.0, col);
+                                    let (r, resp) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::click());
+                                    ui.painter().circle_filled(r.center(), 8.0, col);
                                     if is_sel {
-                                        ui.painter().circle_stroke(r.center(), 7.5, Stroke::new(1.5, Color32::WHITE));
+                                        ui.painter().circle_stroke(r.center(), 9.5, Stroke::new(1.8, Color32::WHITE));
                                     }
                                     if resp.clicked() {
                                         self.active_color = col;
                                     }
                                 }
                                 ui.separator();
-                                if ui.small_button("↩").on_hover_text("Undo (Ctrl+Z)").clicked() {
+                                if ui.button(RichText::new("↩").size(15.0)).on_hover_text("Undo (Ctrl+Z)").clicked() {
                                     self.history.undo();
                                 }
-                                if ui.small_button("↪").on_hover_text("Redo (Ctrl+Y)").clicked() {
+                                if ui.button(RichText::new("↪").size(15.0)).on_hover_text("Redo (Ctrl+Y)").clicked() {
                                     self.history.redo();
                                 }
                                 ui.separator();
-                                if ui.button("📋 Copy").clicked() {
+                                if ui.button(RichText::new("📋 Copy").size(14.5)).clicked() {
                                     do_copy = true;
                                 }
-                                if ui.button("💾 Save").clicked() {
+                                if ui.button(RichText::new("💾 Save").size(14.5)).clicked() {
                                     do_save = true;
                                 }
-                                if ui.button("📌 Pin").clicked() {
+                                if ui.button(RichText::new("📌 Pin").size(14.5)).clicked() {
                                     do_pin = true;
                                 }
-                                if ui.button("🎬 Rec").on_hover_text("Record this region").clicked() {
+                                if ui.button(RichText::new("🎬 Rec").size(14.5)).on_hover_text("Record this region").clicked() {
                                     do_rec = true;
                                 }
-                                if ui.button("✏ Editor").clicked() {
+                                if ui.button(RichText::new("✏ Editor").size(14.5)).clicked() {
                                     do_editor = true;
                                 }
-                                if ui.button("❌").on_hover_text("Cancel (Esc)").clicked() {
+                                if ui.button(RichText::new("❌").size(14.5)).on_hover_text("Cancel (Esc)").clicked() {
                                     do_cancel = true;
                                 }
                             });

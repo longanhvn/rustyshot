@@ -7,7 +7,7 @@
 ## Tính năng chính
 
 - **Chụp ảnh màn hình đa chế độ:**
-  - Chụp vùng chọn (`Ctrl+Shift+S`) với kính lúp 11×11, thước căn dòng (crosshair), giữ `Shift` khóa tỉ lệ vuông, phím mũi tên tinh chỉnh `1px` / `10px`, 8 điểm kéo kích thước, tự động bắt khung cửa sổ khi rê chuột.
+  - Chụp vùng chọn (`Ctrl+Shift+S`) với kính lúp 11×11, thước căn dòng (crosshair), thanh công cụ nổi kích thước lớn ở cạnh trên sau khi chọn vùng, giữ `Shift` khóa tỉ lệ vuông, phím mũi tên tinh chỉnh `1px` / `10px`, 8 điểm kéo kích thước, tự động bắt khung cửa sổ khi rê chuột.
   - Chụp toàn màn hình (`Ctrl+Shift+F`), chụp theo cửa sổ, hẹn giờ chụp (`0s / 3s / 5s`).
   - Dán ảnh trực tiếp từ Clipboard (`Ctrl+V`) hoặc kéo thả file ảnh vào ứng dụng.
 - **Trình chỉnh sửa & chú thích nhanh:**
