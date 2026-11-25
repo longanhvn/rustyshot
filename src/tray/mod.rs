@@ -18,70 +18,15 @@ pub enum TrayAction {
 }
 
 pub fn generate_app_icon_rgba() -> (Vec<u8>, u32, u32) {
-    let size = 32u32;
-    let mut rgba = vec![0u8; (size * size * 4) as usize];
-    let center = (size as f32 - 1.0) * 0.5;
-
-    for y in 0..size {
-        for x in 0..size {
-            let idx = ((y * size + x) * 4) as usize;
-            let fx = x as f32;
-            let fy = y as f32;
-            let dx = (fx - center).abs();
-            let dy = (fy - center).abs();
-
-            // Rounded square mask
-            let corner_r = 6.0f32;
-            let half = 14.5f32;
-            let inside = if dx > half - corner_r && dy > half - corner_r {
-                let cx = dx - (half - corner_r);
-                let cy = dy - (half - corner_r);
-                (cx * cx + cy * cy).sqrt() <= corner_r
-            } else {
-                dx <= half && dy <= half
-            };
-
-            if !inside {
-                continue;
-            }
-
-            // Dark slate background
-            let mut r = 18u8;
-            let mut g = 24u8;
-            let mut b = 38u8;
-
-            let dist = ((fx - center).powi(2) + (fy - center).powi(2)).sqrt();
-
-            // Outer cyan viewfinder corners
-            let in_bracket_x = (6..=11).contains(&x) || (20..=25).contains(&x);
-            let in_bracket_y = (6..=11).contains(&y) || (20..=25).contains(&y);
-            let on_edge_h = (y == 6 || y == 7 || y == 24 || y == 25) && in_bracket_x;
-            let on_edge_v = (x == 6 || x == 7 || x == 24 || x == 25) && in_bracket_y;
-
-            if on_edge_h || on_edge_v {
-                r = 56;
-                g = 189;
-                b = 248;
-            } else if (dist - 5.2).abs() <= 1.1 {
-                // Bright amber/orange camera lens ring
-                r = 249;
-                g = 115;
-                b = 22;
-            } else if dist <= 2.3 {
-                // White shutter center dot
-                r = 248;
-                g = 250;
-                b = 252;
-            }
-
-            rgba[idx] = r;
-            rgba[idx + 1] = g;
-            rgba[idx + 2] = b;
-            rgba[idx + 3] = 255;
-        }
+    let bytes = include_bytes!("../../assets/icon.png");
+    if let Ok(img) = image::load_from_memory(bytes) {
+        let resized = img.resize_exact(64, 64, image::imageops::FilterType::Lanczos3);
+        let rgba = resized.to_rgba8();
+        let (w, h) = rgba.dimensions();
+        return (rgba.into_raw(), w, h);
     }
-
-    (rgba, size, size)
+    let size = 64u32;
+    (vec![56u8; (size * size * 4) as usize], size, size)
 }
 
 pub struct TrayController {
@@ -453,8 +398,8 @@ mod tests {
     #[test]
     fn test_icon_dimensions() {
         let (rgba, w, h) = generate_app_icon_rgba();
-        assert_eq!(w, 32);
-        assert_eq!(h, 32);
-        assert_eq!(rgba.len(), 32 * 32 * 4);
+        assert_eq!(w, 64);
+        assert_eq!(h, 64);
+        assert_eq!(rgba.len(), 64 * 64 * 4);
     }
 }

@@ -1,8 +1,16 @@
+<p align="center">
+  <img src="assets/icon.png" alt="RustyShot Icon" width="84" />
+</p>
+
 # RustyShot
 
 **RustyShot** là phần mềm chụp ảnh, quay màn hình và chú thích đa nền tảng (Windows, Linux X11/Wayland, macOS) viết bằng **Rust**, gọn nhẹ, 100% portable (chỉ 1 file thực thi duy nhất, không cần cài đặt).
 
 **Tác giả:** Long kakaka (longanhvn)
+
+## Giao diện ứng dụng
+
+![RustyShot Dashboard](docs/screenshots/rustyshot-dashboard.png)
 
 ## Tính năng chính
 

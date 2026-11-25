@@ -4,6 +4,11 @@ Tất cả các thay đổi đáng chú ý của **RustyShot** được ghi nh�
 
 **Tác giả:** Long kakaka (longanhvn)
 
+## [0.3.9] - 2026-11-25
+### Đã thêm
+- Thiết kế và nhúng **Icon chính thức** cho ứng dụng (`assets/icon.ico` & `assets/icon.png`): hiển thị đồng bộ trên file `.exe` Windows (Explorer, Taskbar, Alt+Tab), cửa sổ ứng dụng và System Tray.
+- Bổ sung ảnh chụp giao diện thực tế vào `README.md` (`docs/screenshots/rustyshot-dashboard.png`).
+
 ## [0.3.8] - 2026-11-25
 ### Đã cải thiện
 - Nâng cấp thanh công cụ trong **Editor**: chuyển sang bố cục tự động xuống dòng (`horizontal_wrapped`) để không bị tràn/cắt nút khi cửa sổ nhỏ, đồng thời tăng kích thước nút, chữ (`13.5pt`) và chấm màu (`18×18`) giúp thao tác dễ hơn.

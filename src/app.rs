@@ -790,7 +790,7 @@ impl RustyShotApp {
                             .color(Color32::from_rgb(56, 189, 248)),
                     );
                     ui.label(
-                        RichText::new("v0.3.8")
+                        RichText::new("v0.3.9")
                             .size(11.0)
                             .color(Color32::from_rgb(148, 163, 184)),
                     );

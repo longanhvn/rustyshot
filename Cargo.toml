@@ -1,6 +1,6 @@
 [package]
 name = "rustyshot"
-version = "0.3.8"
+version = "0.3.9"
 edition = "2024"
 description = "Fast, lightweight, cross-platform screenshot, screen recorder & annotation tool written in pure Rust"
 license = "MIT"
@@ -21,6 +21,9 @@ dirs = "5.0"
 suppaftp = { version = "6", default-features = false, features = ["rustls"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 webpki-roots = "0.26"
+
+[build-dependencies]
+winresource = "0.1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 raw-window-handle = "0.6"
