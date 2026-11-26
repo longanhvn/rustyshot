@@ -147,6 +147,9 @@ pub struct RustyShotApp {
     pending_capture: Option<(TrayAction, Instant)>,
     capture_delay_secs: u64,
     force_quit: bool,
+    window_hidden_in_tray: bool,
+    was_hidden_before_capture: bool,
+    was_minimized_before_capture: bool,
     pending_actions: Arc<Mutex<VecDeque<TrayAction>>>,
 
     // Active image & texture (used in RegionOverlay & Editor)
@@ -289,6 +292,9 @@ impl RustyShotApp {
             pending_capture: None,
             capture_delay_secs: 0,
             force_quit: false,
+            window_hidden_in_tray: false,
+            was_hidden_before_capture: false,
+            was_minimized_before_capture: false,
             pending_actions,
             working_image: None,
             working_texture: None,
@@ -356,8 +362,16 @@ impl RustyShotApp {
         match action {
             TrayAction::CaptureRegion | TrayAction::CaptureFullscreen | TrayAction::ColorPicker => {
                 self.overlay_color_picker_only = action == TrayAction::ColorPicker;
+                if self.pending_capture.is_none() && self.mode == AppMode::Dashboard {
+                    self.was_hidden_before_capture = self.window_hidden_in_tray;
+                    self.was_minimized_before_capture =
+                        ctx.input(|i| i.viewport().minimized).unwrap_or(false);
+                }
                 let extra_ms = self.capture_delay_secs * 1000;
-                if self.config.hide_window_on_capture && self.mode == AppMode::Dashboard {
+                if self.config.hide_window_on_capture
+                    && self.mode == AppMode::Dashboard
+                    && !self.window_hidden_in_tray
+                {
                     ctx.send_viewport_cmd(ViewportCommand::Minimized(true));
                     self.pending_capture = Some((
                         action,
@@ -380,6 +394,7 @@ impl RustyShotApp {
             TrayAction::CaptureWindow => {
                 self.window_list = list_capturable_windows().unwrap_or_default();
                 self.show_window_picker = true;
+                self.window_hidden_in_tray = false;
                 ctx.send_viewport_cmd(ViewportCommand::Visible(true));
                 ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
                 ctx.send_viewport_cmd(ViewportCommand::Focus);
@@ -389,6 +404,9 @@ impl RustyShotApp {
                 open_folder_in_os(&self.config.save_dir);
             }
             TrayAction::ShowApp => {
+                self.was_hidden_before_capture = false;
+                self.was_minimized_before_capture = false;
+                self.window_hidden_in_tray = false;
                 self.exit_overlay_to_dashboard(ctx);
                 ctx.send_viewport_cmd(ViewportCommand::Visible(true));
                 ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
@@ -426,20 +444,23 @@ impl RustyShotApp {
                         ctx.send_viewport_cmd(ViewportCommand::Focus);
                     }
                     Err(e) => {
-                        ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
+                        self.restore_window_visibility_after_capture(ctx);
                         self.set_toast(format!("Capture failed: {e}"));
                     }
                 }
             }
             TrayAction::CaptureFullscreen => match capture_all_monitors_composite() {
                 Ok(cap) => {
-                    ctx.send_viewport_cmd(ViewportCommand::Visible(true));
-                    ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
                     let open_ed = self.config.after_capture_open_editor;
+                    if open_ed {
+                        self.window_hidden_in_tray = false;
+                        ctx.send_viewport_cmd(ViewportCommand::Visible(true));
+                        ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
+                    }
                     self.finalize_captured_image(ctx, cap.image, "Fullscreen", open_ed);
                 }
                 Err(e) => {
-                    ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
+                    self.restore_window_visibility_after_capture(ctx);
                     self.set_toast(format!("Fullscreen capture failed: {e}"));
                 }
             },
@@ -570,6 +591,22 @@ impl RustyShotApp {
         }
     }
 
+    fn restore_window_visibility_after_capture(&mut self, ctx: &egui::Context) {
+        if self.was_hidden_before_capture {
+            self.window_hidden_in_tray = true;
+            ctx.send_viewport_cmd(ViewportCommand::Visible(false));
+        } else if self.was_minimized_before_capture {
+            self.window_hidden_in_tray = false;
+            ctx.send_viewport_cmd(ViewportCommand::Minimized(true));
+        } else {
+            self.window_hidden_in_tray = false;
+            ctx.send_viewport_cmd(ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
+        }
+        self.was_hidden_before_capture = false;
+        self.was_minimized_before_capture = false;
+    }
+
     fn exit_overlay_to_dashboard(&mut self, ctx: &egui::Context) {
         if self.mode == AppMode::RegionOverlay {
             ctx.send_viewport_cmd(ViewportCommand::Fullscreen(false));
@@ -579,11 +616,16 @@ impl RustyShotApp {
         self.selection_rect = None;
         self.in_progress_item = None;
         self.pending_text_pos = None;
+        self.restore_window_visibility_after_capture(ctx);
     }
 
     fn open_in_editor(&mut self, ctx: &egui::Context, img: RgbaImage) {
         ctx.send_viewport_cmd(ViewportCommand::Fullscreen(false));
         ctx.send_viewport_cmd(ViewportCommand::Decorations(true));
+        self.window_hidden_in_tray = false;
+        self.was_hidden_before_capture = false;
+        self.was_minimized_before_capture = false;
+        ctx.send_viewport_cmd(ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
         let tex = Self::rgba_to_texture(ctx, "rustyshot_editor", &img);
         self.working_image = Some(img);
@@ -2936,6 +2978,7 @@ impl eframe::App for RustyShotApp {
             && self.config.minimize_to_tray
             && ctx.input(|i| i.viewport().close_requested())
         {
+            self.window_hidden_in_tray = true;
             ctx.send_viewport_cmd(ViewportCommand::CancelClose);
             ctx.send_viewport_cmd(ViewportCommand::Visible(false));
         }

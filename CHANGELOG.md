@@ -2,6 +2,10 @@
 
 Tất cả các thay đổi đáng chú ý của **RustyShot** được ghi nhận tại đây.
 
+## [0.3.14] - 2026-11-25
+### Sửa lỗi (Bugfixes)
+- **Giữ nguyên trạng thái ẩn/hiện cửa sổ chính sau khi chụp ảnh:** Khi người dùng ẩn RustyShot xuống khay hệ thống (hoặc thu nhỏ cửa sổ) rồi chụp vùng/toàn màn hình qua phím tắt hoặc tray, bấm **Copy**, **Save**, **Pin**, **Rec** hoặc **Esc/Hủy** trên thanh công cụ chụp sẽ tự động giữ nguyên trạng thái ẩn/thu nhỏ như trước khi chụp, không tự bật lại cửa sổ chính gây bất tiện; nếu cửa sổ chính đang mở trước khi chụp thì sau khi chụp xong vẫn giữ hiện bình thường.
+
 ## [0.3.13] - 2026-11-25
 ### Tính năng mới & Sửa lỗi
 - **Hỗ trợ đa ngôn ngữ (English & Tiếng Việt):**
