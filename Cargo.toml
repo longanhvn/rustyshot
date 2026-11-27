@@ -1,6 +1,6 @@
 [package]
 name = "rustyshot"
-version = "0.3.14"
+version = "0.3.17"
 edition = "2024"
 description = "Fast, lightweight, cross-platform screenshot, screen recorder & annotation tool written in pure Rust"
 license = "MIT"

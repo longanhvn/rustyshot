@@ -14,8 +14,8 @@
 
 ## Tính năng nổi bật
 
-- **Chụp ảnh màn hình đa chế độ:**
-  - **Chụp vùng chọn** (`Ctrl+Shift+S`): kính lúp phóng đại 11×11, thước căn dòng (crosshair), thanh công cụ nổi ở cạnh trên sau khi chọn vùng, giữ `Shift` khóa tỉ lệ vuông, phím mũi tên tinh chỉnh `1px` / `10px`, 8 điểm kéo kích thước, tự động bắt khung cửa sổ khi rê chuột.
+- **Chụp ảnh màn hình đa chế độ & Hỗ trợ đa màn hình (Multi-Monitor):**
+  - **Chụp vùng chọn** (`PrtSc` / `Ctrl+Shift+S`): phủ 1:1 xuyên suốt toàn bộ các màn hình đang kết nối (kể cả màn hình rời tọa độ âm), chụp nền tức thì không lộ cửa sổ ứng dụng hay chớp trắng (`DWMWA_CLOAK`); tích hợp kính lúp phóng đại 11×11, thước căn dòng (crosshair), thanh công cụ nổi tự căn gọn theo từng màn hình, giữ `Shift` khóa tỉ lệ vuông, phím mũi tên tinh chỉnh `1px` / `10px`, 8 điểm kéo kích thước, tự động bắt khung cửa sổ khi rê chuột.
   - **Chụp toàn màn hình** (`Ctrl+Shift+F`), **chụp theo cửa sổ**, hẹn giờ chụp (`0s / 3s / 5s`).
   - Dán ảnh trực tiếp từ Clipboard (`Ctrl+V`) hoặc kéo thả file ảnh vào ứng dụng.
 - **Quay màn hình (tích hợp sẵn MP4 H.264 & GIF — không cần FFmpeg ngoài):**

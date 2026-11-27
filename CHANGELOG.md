@@ -2,6 +2,20 @@
 
 Tất cả các thay đổi đáng chú ý của **RustyShot** được ghi nhận tại đây.
 
+## [0.3.17] - 2026-11-27
+### Tính năng mới & Sửa lỗi trọng tâm
+- **Chụp phím tắt tức thì, không lộ cửa sổ & triệt tiêu 100% hiện tượng lóe trắng / chớp tắt trên Windows:**
+  - Chuyển sang cơ chế chụp nền trước khi đánh thức giao diện kết hợp **Windows DWM Cloaking (`DWMWA_CLOAK`)**, tắt hiệu ứng chuyển cảnh (`DWMWA_TRANSITIONS_FORCEDISABLED`) và đồng bộ Dark Titlebar (`DWMWA_USE_IMMERSIVE_DARK_MODE`).
+  - Khi bấm phím tắt chụp (kể cả khi đang mở cửa sổ chính, thu nhỏ hoặc ẩn dưới System Tray), màn hình được chụp sạch 100% không bao giờ dính cửa sổ RustyShot; lớp phủ chọn vùng chỉ gỡ Cloak sau khi OpenGL đã vẽ xong ảnh chụp ở đúng độ phân giải đích, loại bỏ hoàn toàn khung trắng và hiện tượng tự ẩn chớp tắt.
+  - Ngăn kích hoạt chồng phím tắt chụp mới khi đang mở sẵn lớp phủ chọn vùng.
+- **Hỗ trợ mượt mà đa màn hình & màn hình rời (Multi-Monitor Virtual Desktop):**
+  - Phủ lớp chọn vùng 1:1 xuyên suốt toàn bộ không gian đa màn hình (bao gồm cả màn hình phụ đặt bên trái hoặc phía trên có tọa độ âm `X < 0`, `Y < 0`), khắc phục lỗi co ảnh kèm viền đen trên 1 màn hình.
+  - Bổ sung thông tin ranh giới từng màn hình (`MonitorBounds`): thanh công cụ nổi sau khi kéo vùng chọn, dòng hướng dẫn và kính lúp soi pixel (Loupe) luôn tự bám gọn trong đúng màn hình đang thao tác, không bao giờ bị cắt ngang qua khe giữa 2 màn hình.
+- **Các bản sửa lỗi quan trọng khác:**
+  - **Nút `📋 Copy` & `💾 Save` trên thanh công cụ nổi luôn hoạt động độc lập:** Bấm `Copy` hoặc `Save` luôn thực thi ngay hành động tương ứng kể cả khi người dùng tắt tùy chọn tự động (`Auto-copy` / `Auto-save`) trong Settings.
+  - **Giới hạn biên khi tinh chỉnh bằng phím mũi tên:** Đẩy vùng chọn `1px` / `Shift + Mũi tên` `10px` luôn tự kẹp trong phạm vi kích thước ảnh chụp.
+  - **Chuẩn hóa tỷ lệ khung viền đỏ khi quay video vùng chọn trên màn hình High-DPI / đa màn hình.**
+
 ## [0.3.14] - 2026-11-25
 ### Sửa lỗi (Bugfixes)
 - **Giữ nguyên trạng thái ẩn/hiện cửa sổ chính sau khi chụp ảnh:** Khi người dùng ẩn RustyShot xuống khay hệ thống (hoặc thu nhỏ cửa sổ) rồi chụp vùng/toàn màn hình qua phím tắt hoặc tray, bấm **Copy**, **Save**, **Pin**, **Rec** hoặc **Esc/Hủy** trên thanh công cụ chụp sẽ tự động giữ nguyên trạng thái ẩn/thu nhỏ như trước khi chụp, không tự bật lại cửa sổ chính gây bất tiện; nếu cửa sổ chính đang mở trước khi chụp thì sau khi chụp xong vẫn giữ hiện bình thường.

@@ -3361,7 +3361,7 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "rustyshot"
-version = "0.3.14"
+version = "0.3.17"
 dependencies = [
  "arboard",
  "chrono",

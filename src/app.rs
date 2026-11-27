@@ -1,8 +1,8 @@
 use crate::capture::{
-    WindowSummary, capture_all_monitors_composite, capture_window_by_id, copy_image_to_clipboard,
-    copy_text_to_clipboard, crop_rgba_image, flip_horizontal, flip_vertical,
-    list_capturable_windows, paste_image_from_clipboard, rotate_90_ccw, rotate_90_cw,
-    save_image_to_file,
+    MonitorBounds, ScreenCaptureResult, WindowSummary, capture_all_monitors_composite,
+    capture_window_by_id, copy_image_to_clipboard, copy_text_to_clipboard, crop_rgba_image,
+    flip_horizontal, flip_vertical, list_capturable_windows, paste_image_from_clipboard,
+    rotate_90_ccw, rotate_90_cw, save_image_to_file,
 };
 use crate::editor::{
     AnnotationHistory, AnnotationItem, PALETTE_COLORS, ToolKind, paint_annotations_egui,
@@ -47,6 +47,98 @@ fn extract_win32_hwnd(_cc: &eframe::CreationContext<'_>) -> isize {
     0
 }
 
+type UploadRxPayload = Result<(String, Option<String>, Option<PathBuf>), String>;
+
+struct PreCapturedPayload {
+    action: TrayAction,
+    was_hidden: bool,
+    was_minimized: bool,
+    result: Result<ScreenCaptureResult, String>,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug)]
+struct SavedWindowState {
+    left: i32,
+    top: i32,
+    width: i32,
+    height: i32,
+}
+
+#[cfg(target_os = "windows")]
+#[repr(C)]
+struct Win32Rect {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+}
+
+#[cfg(target_os = "windows")]
+fn win32_init_window_attributes(hwnd: isize) {
+    if hwnd == 0 {
+        return;
+    }
+    #[link(name = "dwmapi")]
+    unsafe extern "system" {
+        fn DwmSetWindowAttribute(
+            hwnd: isize,
+            dw_attribute: u32,
+            pv_attribute: *const std::ffi::c_void,
+            cb_attribute: u32,
+        ) -> i32;
+    }
+    const DWMWA_TRANSITIONS_FORCEDISABLED: u32 = 3;
+    const DWMWA_USE_IMMERSIVE_DARK_MODE: u32 = 20;
+    let enabled: i32 = 1;
+    unsafe {
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_TRANSITIONS_FORCEDISABLED,
+            (&raw const enabled).cast(),
+            std::mem::size_of::<i32>() as u32,
+        );
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_USE_IMMERSIVE_DARK_MODE,
+            (&raw const enabled).cast(),
+            std::mem::size_of::<i32>() as u32,
+        );
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn win32_init_window_attributes(_hwnd: isize) {}
+
+#[cfg(target_os = "windows")]
+fn win32_set_cloak(hwnd: isize, cloaked: bool) {
+    if hwnd == 0 {
+        return;
+    }
+    #[link(name = "dwmapi")]
+    unsafe extern "system" {
+        fn DwmSetWindowAttribute(
+            hwnd: isize,
+            dw_attribute: u32,
+            pv_attribute: *const std::ffi::c_void,
+            cb_attribute: u32,
+        ) -> i32;
+    }
+    const DWMWA_CLOAK: u32 = 13;
+    let val: i32 = i32::from(cloaked);
+    unsafe {
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_CLOAK,
+            (&raw const val).cast(),
+            std::mem::size_of::<i32>() as u32,
+        );
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn win32_set_cloak(_hwnd: isize, _cloaked: bool) {}
+
 #[cfg(target_os = "windows")]
 fn win32_show_window(hwnd: isize) {
     if hwnd == 0 {
@@ -67,6 +159,207 @@ fn win32_show_window(hwnd: isize) {
 
 #[cfg(not(target_os = "windows"))]
 fn win32_show_window(_hwnd: isize) {}
+
+#[cfg(target_os = "windows")]
+fn win32_show_noactivate(hwnd: isize) {
+    if hwnd == 0 {
+        return;
+    }
+    unsafe extern "system" {
+        fn ShowWindow(hwnd: isize, n_cmd_show: i32) -> i32;
+    }
+    const SW_SHOWNOACTIVATE: i32 = 4;
+    unsafe {
+        ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn win32_show_noactivate(_hwnd: isize) {}
+
+#[cfg(target_os = "windows")]
+fn win32_focus_window(hwnd: isize) {
+    if hwnd == 0 {
+        return;
+    }
+    unsafe extern "system" {
+        fn SetForegroundWindow(hwnd: isize) -> i32;
+    }
+    unsafe {
+        SetForegroundWindow(hwnd);
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn win32_focus_window(_hwnd: isize) {}
+
+#[cfg(target_os = "windows")]
+fn win32_hide_window(hwnd: isize) {
+    if hwnd == 0 {
+        return;
+    }
+    unsafe extern "system" {
+        fn ShowWindow(hwnd: isize, n_cmd_show: i32) -> i32;
+    }
+    const SW_HIDE: i32 = 0;
+    unsafe {
+        ShowWindow(hwnd, SW_HIDE);
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn win32_hide_window(_hwnd: isize) {}
+
+#[cfg(target_os = "windows")]
+fn win32_is_window_minimized(hwnd: isize) -> bool {
+    if hwnd == 0 {
+        return false;
+    }
+    unsafe extern "system" {
+        fn IsIconic(hwnd: isize) -> i32;
+    }
+    unsafe { IsIconic(hwnd) != 0 }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn win32_is_window_minimized(_hwnd: isize) -> bool {
+    false
+}
+
+#[cfg(target_os = "windows")]
+fn win32_get_window_state(hwnd: isize) -> Option<SavedWindowState> {
+    if hwnd == 0 {
+        return None;
+    }
+    unsafe extern "system" {
+        fn GetWindowRect(hwnd: isize, lp_rect: *mut Win32Rect) -> i32;
+    }
+    unsafe {
+        let mut rc = Win32Rect {
+            left: 100,
+            top: 100,
+            right: 960,
+            bottom: 660,
+        };
+        if GetWindowRect(hwnd, &mut rc) == 0 || rc.left <= -30000 || rc.top <= -30000 {
+            return Some(SavedWindowState {
+                left: 120,
+                top: 100,
+                width: 860,
+                height: 560,
+            });
+        }
+        Some(SavedWindowState {
+            left: rc.left,
+            top: rc.top,
+            width: (rc.right - rc.left).max(720),
+            height: (rc.bottom - rc.top).max(460),
+        })
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn win32_get_window_state(_hwnd: isize) -> Option<SavedWindowState> {
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn win32_set_window_bounds(hwnd: isize, x: i32, y: i32, width: i32, height: i32, topmost: bool) {
+    if hwnd == 0 || width <= 0 || height <= 0 {
+        return;
+    }
+    unsafe extern "system" {
+        fn SetWindowPos(
+            hwnd: isize,
+            hwnd_insert_after: isize,
+            x: i32,
+            y: i32,
+            cx: i32,
+            cy: i32,
+            u_flags: u32,
+        ) -> i32;
+    }
+    const HWND_TOPMOST: isize = -1;
+    const HWND_NOTOPMOST: isize = -2;
+    const SWP_NOACTIVATE: u32 = 0x0010;
+    const SWP_NOOWNERZORDER: u32 = 0x0200;
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            if topmost { HWND_TOPMOST } else { HWND_NOTOPMOST },
+            x,
+            y,
+            width,
+            height,
+            SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+        );
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn win32_set_window_bounds(
+    _hwnd: isize,
+    _x: i32,
+    _y: i32,
+    _width: i32,
+    _height: i32,
+    _topmost: bool,
+) {
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_background_capture(
+    hwnd: isize,
+    action: TrayAction,
+    hide_window_on_capture: bool,
+    was_hidden_in_tray: bool,
+    extra_delay_ms: u64,
+    precaptured: Arc<Mutex<Option<PreCapturedPayload>>>,
+    capture_in_flight: Arc<AtomicBool>,
+    ctx_wake: egui::Context,
+) {
+    if capture_in_flight
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return;
+    }
+    std::thread::spawn(move || {
+        let was_hidden = was_hidden_in_tray;
+        let was_minimized = !was_hidden && win32_is_window_minimized(hwnd);
+
+        // Cloak window IMMEDIATELY (zero DWM animation, zero flash!)
+        win32_set_cloak(hwnd, true);
+
+        let wait_ms = if hide_window_on_capture && !was_hidden && !was_minimized {
+            win32_hide_window(hwnd);
+            140 + extra_delay_ms
+        } else {
+            extra_delay_ms
+        };
+        if wait_ms > 0 {
+            std::thread::sleep(Duration::from_millis(wait_ms));
+        }
+
+        // Capture desktop while RustyShot is 100% cloaked/hidden
+        let result = capture_all_monitors_composite();
+
+        if let Ok(mut slot) = precaptured.lock() {
+            *slot = Some(PreCapturedPayload {
+                action,
+                was_hidden,
+                was_minimized,
+                result,
+            });
+        }
+        capture_in_flight.store(false, Ordering::SeqCst);
+
+        // Wake winit/eframe WHILE STILL CLOAKED (zero white flash on screen!)
+        win32_set_cloak(hwnd, true);
+        win32_show_noactivate(hwnd);
+        ctx_wake.request_repaint();
+    });
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AppMode {
@@ -145,8 +438,18 @@ pub struct RustyShotApp {
 
     // Pending delayed capture (so main window hides cleanly before grabbing screen)
     pending_capture: Option<(TrayAction, Instant)>,
+    precaptured: Arc<Mutex<Option<PreCapturedPayload>>>,
+    capture_in_flight: Arc<AtomicBool>,
+    hide_on_capture_flag: Arc<AtomicBool>,
+    hidden_in_tray_flag: Arc<AtomicBool>,
+    in_overlay_flag: Arc<AtomicBool>,
     capture_delay_secs: u64,
     force_quit: bool,
+    hwnd: isize,
+    win32_overlay_saved: Option<SavedWindowState>,
+    pending_bounds: Option<(i32, i32, i32, i32, bool)>,
+    uncloak_countdown: u8,
+    uncloak_focus: bool,
     window_hidden_in_tray: bool,
     was_hidden_before_capture: bool,
     was_minimized_before_capture: bool,
@@ -157,6 +460,7 @@ pub struct RustyShotApp {
     working_texture: Option<TextureHandle>,
     working_origin: (i32, i32),
     working_scale: f32,
+    working_monitors: Vec<MonitorBounds>,
     loupe_texture: Option<TextureHandle>,
 
     // Pinned floating screenshots
@@ -169,7 +473,7 @@ pub struct RustyShotApp {
     rec_stop_requested: Arc<AtomicBool>,
     rec_stop_rx: Option<mpsc::Receiver<Result<RecordingResult, String>>>,
     save_rx: Option<mpsc::Receiver<(Result<PathBuf, String>, bool)>>,
-    upload_rx: Option<mpsc::Receiver<Result<(String, Option<String>, Option<PathBuf>), String>>>,
+    upload_rx: Option<mpsc::Receiver<UploadRxPayload>>,
     upload_banner: Option<UploadBannerState>,
     ftp_test_status: Option<String>,
     capturing_hotkey: Option<HotkeyTarget>,
@@ -229,10 +533,21 @@ impl RustyShotApp {
         let stroke_width = config.default_stroke_width;
 
         let hwnd = extract_win32_hwnd(cc);
+        win32_init_window_attributes(hwnd);
         let pending_actions = Arc::new(Mutex::new(VecDeque::new()));
+        let precaptured: Arc<Mutex<Option<PreCapturedPayload>>> = Arc::new(Mutex::new(None));
+        let capture_in_flight = Arc::new(AtomicBool::new(false));
+        let hide_on_capture_flag = Arc::new(AtomicBool::new(config.hide_window_on_capture));
+        let hidden_in_tray_flag = Arc::new(AtomicBool::new(false));
+        let in_overlay_flag = Arc::new(AtomicBool::new(false));
         let tray_ids = tray.as_ref().map(|t| t.id_map());
         let hk_ids = hotkeys.as_ref().map(|h| h.shared_ids());
         let pending_bg = Arc::clone(&pending_actions);
+        let precap_bg = Arc::clone(&precaptured);
+        let inflight_bg = Arc::clone(&capture_in_flight);
+        let hide_bg = Arc::clone(&hide_on_capture_flag);
+        let tray_hidden_bg = Arc::clone(&hidden_in_tray_flag);
+        let overlay_bg = Arc::clone(&in_overlay_flag);
         let ctx_wake = cc.egui_ctx.clone();
         std::thread::spawn(move || {
             loop {
@@ -242,31 +557,59 @@ impl RustyShotApp {
                     if let Ok(mut q) = pending_bg.lock() {
                         q.push_back(TrayAction::ShowApp);
                     }
+                    win32_set_cloak(hwnd, false);
                     win32_show_window(hwnd);
                     woke = true;
                 }
                 let evs = poll_background_tray_and_hotkeys(tray_ids.as_ref(), hk_ids.as_ref());
                 if !evs.is_empty() {
-                    let needs_wake = evs.iter().any(|a| {
-                        matches!(
+                    let mut needs_wake_show = false;
+                    for a in evs {
+                        if matches!(
+                            a,
+                            TrayAction::CaptureRegion
+                                | TrayAction::CaptureFullscreen
+                                | TrayAction::ColorPicker
+                        ) {
+                            if overlay_bg.load(Ordering::Relaxed) {
+                                continue;
+                            }
+                            if cfg!(target_os = "windows") {
+                                // Cloak + capture FIRST, THEN wake eframe while still cloaked!
+                                spawn_background_capture(
+                                    hwnd,
+                                    a,
+                                    hide_bg.load(Ordering::Relaxed),
+                                    tray_hidden_bg.load(Ordering::Relaxed),
+                                    0,
+                                    Arc::clone(&precap_bg),
+                                    Arc::clone(&inflight_bg),
+                                    ctx_wake.clone(),
+                                );
+                                continue;
+                            }
+                        }
+                        if matches!(
                             a,
                             TrayAction::ShowApp
                                 | TrayAction::CaptureWindow
-                                | TrayAction::CaptureRegion
-                                | TrayAction::ColorPicker
-                                | TrayAction::CaptureFullscreen
+                                | TrayAction::ToggleRecord
                                 | TrayAction::Quit
-                        )
-                    });
-                    if let Ok(mut q) = pending_bg.lock() {
-                        for a in evs {
+                                | TrayAction::CaptureRegion
+                                | TrayAction::CaptureFullscreen
+                                | TrayAction::ColorPicker
+                        ) {
+                            needs_wake_show = true;
+                        }
+                        if let Ok(mut q) = pending_bg.lock() {
                             q.push_back(a);
                         }
+                        woke = true;
                     }
-                    if needs_wake {
+                    if needs_wake_show {
+                        win32_set_cloak(hwnd, false);
                         win32_show_window(hwnd);
                     }
-                    woke = true;
                 }
                 if woke {
                     ctx_wake.request_repaint();
@@ -290,8 +633,18 @@ impl RustyShotApp {
             window_list: Vec::new(),
             overlay_color_picker_only: false,
             pending_capture: None,
+            precaptured,
+            capture_in_flight,
+            hide_on_capture_flag,
+            hidden_in_tray_flag,
+            in_overlay_flag,
             capture_delay_secs: 0,
             force_quit: false,
+            hwnd,
+            win32_overlay_saved: None,
+            pending_bounds: None,
+            uncloak_countdown: 0,
+            uncloak_focus: false,
             window_hidden_in_tray: false,
             was_hidden_before_capture: false,
             was_minimized_before_capture: false,
@@ -300,6 +653,7 @@ impl RustyShotApp {
             working_texture: None,
             working_origin: (0, 0),
             working_scale: 1.0,
+            working_monitors: Vec::new(),
             loupe_texture: None,
             pinned_shots: Vec::new(),
             next_pin_id: 1,
@@ -361,25 +715,42 @@ impl RustyShotApp {
     fn trigger_capture(&mut self, ctx: &egui::Context, action: TrayAction) {
         match action {
             TrayAction::CaptureRegion | TrayAction::CaptureFullscreen | TrayAction::ColorPicker => {
+                // Ignore re-trigger while already in RegionOverlay so we never capture our own overlay
+                if self.mode == AppMode::RegionOverlay {
+                    return;
+                }
                 self.overlay_color_picker_only = action == TrayAction::ColorPicker;
-                if self.pending_capture.is_none() && self.mode == AppMode::Dashboard {
+                let extra_ms = self.capture_delay_secs * 1000;
+                if cfg!(target_os = "windows") {
+                    // Use background capture thread so cloak + capture runs cleanly with zero flash!
+                    spawn_background_capture(
+                        self.hwnd,
+                        action,
+                        self.config.hide_window_on_capture,
+                        self.window_hidden_in_tray,
+                        extra_ms,
+                        Arc::clone(&self.precaptured),
+                        Arc::clone(&self.capture_in_flight),
+                        ctx.clone(),
+                    );
+                    return;
+                }
+                if self.pending_capture.is_none() {
                     self.was_hidden_before_capture = self.window_hidden_in_tray;
                     self.was_minimized_before_capture =
                         ctx.input(|i| i.viewport().minimized).unwrap_or(false);
                 }
-                let extra_ms = self.capture_delay_secs * 1000;
-                if self.config.hide_window_on_capture
-                    && self.mode == AppMode::Dashboard
-                    && !self.window_hidden_in_tray
-                {
+                if self.config.hide_window_on_capture && !self.was_hidden_before_capture {
                     ctx.send_viewport_cmd(ViewportCommand::Minimized(true));
                     self.pending_capture = Some((
                         action,
-                        Instant::now() + Duration::from_millis(180 + extra_ms),
+                        Instant::now() + Duration::from_millis(220 + extra_ms),
                     ));
+                    ctx.request_repaint_after(Duration::from_millis(40));
                 } else if extra_ms > 0 {
                     self.pending_capture =
                         Some((action, Instant::now() + Duration::from_millis(extra_ms)));
+                    ctx.request_repaint_after(Duration::from_millis(40));
                 } else {
                     self.execute_capture_now(ctx, action);
                 }
@@ -395,6 +766,9 @@ impl RustyShotApp {
                 self.window_list = list_capturable_windows().unwrap_or_default();
                 self.show_window_picker = true;
                 self.window_hidden_in_tray = false;
+                self.uncloak_countdown = 0;
+                win32_set_cloak(self.hwnd, false);
+                win32_show_window(self.hwnd);
                 ctx.send_viewport_cmd(ViewportCommand::Visible(true));
                 ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
                 ctx.send_viewport_cmd(ViewportCommand::Focus);
@@ -408,6 +782,9 @@ impl RustyShotApp {
                 self.was_minimized_before_capture = false;
                 self.window_hidden_in_tray = false;
                 self.exit_overlay_to_dashboard(ctx);
+                self.uncloak_countdown = 0;
+                win32_set_cloak(self.hwnd, false);
+                win32_show_window(self.hwnd);
                 ctx.send_viewport_cmd(ViewportCommand::Visible(true));
                 ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
                 ctx.send_viewport_cmd(ViewportCommand::Focus);
@@ -420,28 +797,61 @@ impl RustyShotApp {
     }
 
     fn execute_capture_now(&mut self, ctx: &egui::Context, action: TrayAction) {
+        let res = capture_all_monitors_composite();
+        self.apply_captured_result(ctx, action, res);
+    }
+
+    fn apply_captured_result(
+        &mut self,
+        ctx: &egui::Context,
+        action: TrayAction,
+        result: Result<ScreenCaptureResult, String>,
+    ) {
         match action {
             TrayAction::CaptureRegion | TrayAction::ColorPicker => {
                 self.overlay_color_picker_only = action == TrayAction::ColorPicker;
                 self.window_list = list_capturable_windows().unwrap_or_default();
-                match capture_all_monitors_composite() {
+                match result {
                     Ok(cap) => {
+                        let cap_w = cap.image.width() as i32;
+                        let cap_h = cap.image.height() as i32;
                         let tex = Self::rgba_to_texture(ctx, "rustyshot_overlay", &cap.image);
                         self.working_origin = (cap.origin_x, cap.origin_y);
                         self.working_image = Some(cap.image);
                         self.working_texture = Some(tex);
                         self.working_scale = cap.scale_factor.max(1.0);
+                        self.working_monitors = cap.monitors;
                         self.selection_rect = None;
                         self.history.clear();
                         self.next_step_number = 1;
                         self.in_progress_item = None;
                         self.pending_text_pos = None;
                         self.mode = AppMode::RegionOverlay;
-                        ctx.send_viewport_cmd(ViewportCommand::Visible(true));
-                        ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
-                        ctx.send_viewport_cmd(ViewportCommand::Decorations(false));
-                        ctx.send_viewport_cmd(ViewportCommand::Fullscreen(true));
-                        ctx.send_viewport_cmd(ViewportCommand::Focus);
+                        if cfg!(target_os = "windows") && self.hwnd != 0 {
+                            // Keep window DWM-cloaked while winit removes decorations & resizes
+                            // across all monitors, then uncloak AFTER OpenGL renders the screenshot!
+                            win32_set_cloak(self.hwnd, true);
+                            if self.win32_overlay_saved.is_none() {
+                                self.win32_overlay_saved = win32_get_window_state(self.hwnd);
+                            }
+                            ctx.send_viewport_cmd(ViewportCommand::Visible(true));
+                            ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
+                            ctx.send_viewport_cmd(ViewportCommand::Decorations(false));
+                            ctx.send_viewport_cmd(ViewportCommand::WindowLevel(
+                                egui::WindowLevel::AlwaysOnTop,
+                            ));
+                            self.pending_bounds =
+                                Some((cap.origin_x, cap.origin_y, cap_w, cap_h, true));
+                            self.uncloak_countdown = 3;
+                            self.uncloak_focus = true;
+                            ctx.request_repaint();
+                        } else {
+                            ctx.send_viewport_cmd(ViewportCommand::Visible(true));
+                            ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
+                            ctx.send_viewport_cmd(ViewportCommand::Decorations(false));
+                            ctx.send_viewport_cmd(ViewportCommand::Fullscreen(true));
+                            ctx.send_viewport_cmd(ViewportCommand::Focus);
+                        }
                     }
                     Err(e) => {
                         self.restore_window_visibility_after_capture(ctx);
@@ -449,11 +859,12 @@ impl RustyShotApp {
                     }
                 }
             }
-            TrayAction::CaptureFullscreen => match capture_all_monitors_composite() {
+            TrayAction::CaptureFullscreen => match result {
                 Ok(cap) => {
                     let open_ed = self.config.after_capture_open_editor;
                     if open_ed {
                         self.window_hidden_in_tray = false;
+                        win32_show_window(self.hwnd);
                         ctx.send_viewport_cmd(ViewportCommand::Visible(true));
                         ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
                     }
@@ -594,14 +1005,27 @@ impl RustyShotApp {
     fn restore_window_visibility_after_capture(&mut self, ctx: &egui::Context) {
         if self.was_hidden_before_capture {
             self.window_hidden_in_tray = true;
+            self.uncloak_countdown = 0;
+            self.uncloak_focus = false;
             ctx.send_viewport_cmd(ViewportCommand::Visible(false));
+            win32_hide_window(self.hwnd);
+            win32_set_cloak(self.hwnd, false);
         } else if self.was_minimized_before_capture {
             self.window_hidden_in_tray = false;
+            ctx.send_viewport_cmd(ViewportCommand::Visible(true));
             ctx.send_viewport_cmd(ViewportCommand::Minimized(true));
+            self.uncloak_countdown = 2;
+            self.uncloak_focus = false;
+            ctx.request_repaint();
         } else {
             self.window_hidden_in_tray = false;
             ctx.send_viewport_cmd(ViewportCommand::Visible(true));
             ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
+            if cfg!(target_os = "windows") && self.hwnd != 0 {
+                self.uncloak_countdown = 3;
+                self.uncloak_focus = true;
+                ctx.request_repaint();
+            }
         }
         self.was_hidden_before_capture = false;
         self.was_minimized_before_capture = false;
@@ -609,8 +1033,26 @@ impl RustyShotApp {
 
     fn exit_overlay_to_dashboard(&mut self, ctx: &egui::Context) {
         if self.mode == AppMode::RegionOverlay {
+            // Cloak immediately so resizing back from multi-monitor overlay never flashes white!
+            win32_set_cloak(self.hwnd, true);
+            ctx.send_viewport_cmd(ViewportCommand::WindowLevel(egui::WindowLevel::Normal));
             ctx.send_viewport_cmd(ViewportCommand::Fullscreen(false));
             ctx.send_viewport_cmd(ViewportCommand::Decorations(true));
+            if let Some(saved) = self.win32_overlay_saved.take() {
+                if self.was_hidden_before_capture {
+                    win32_set_window_bounds(
+                        self.hwnd,
+                        saved.left,
+                        saved.top,
+                        saved.width,
+                        saved.height,
+                        false,
+                    );
+                } else {
+                    self.pending_bounds =
+                        Some((saved.left, saved.top, saved.width, saved.height, false));
+                }
+            }
         }
         self.mode = AppMode::Dashboard;
         self.selection_rect = None;
@@ -620,13 +1062,25 @@ impl RustyShotApp {
     }
 
     fn open_in_editor(&mut self, ctx: &egui::Context, img: RgbaImage) {
+        win32_set_cloak(self.hwnd, true);
+        ctx.send_viewport_cmd(ViewportCommand::WindowLevel(egui::WindowLevel::Normal));
         ctx.send_viewport_cmd(ViewportCommand::Fullscreen(false));
         ctx.send_viewport_cmd(ViewportCommand::Decorations(true));
+        if let Some(saved) = self.win32_overlay_saved.take() {
+            self.pending_bounds =
+                Some((saved.left, saved.top, saved.width, saved.height, false));
+        }
         self.window_hidden_in_tray = false;
         self.was_hidden_before_capture = false;
         self.was_minimized_before_capture = false;
+        win32_show_noactivate(self.hwnd);
         ctx.send_viewport_cmd(ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
+        if cfg!(target_os = "windows") && self.hwnd != 0 {
+            self.uncloak_countdown = 3;
+            self.uncloak_focus = true;
+            ctx.request_repaint();
+        }
         let tex = Self::rgba_to_texture(ctx, "rustyshot_editor", &img);
         self.working_image = Some(img);
         self.working_texture = Some(tex);
@@ -798,7 +1252,11 @@ impl RustyShotApp {
             return;
         };
         if let Some([rx, ry, rw, rh]) = self.recording_region {
-            let scale = self.working_scale.max(1.0);
+            let scale = if self.working_scale > 1.01 {
+                self.working_scale
+            } else {
+                ctx.pixels_per_point().max(1.0)
+            };
             let lx = (self.working_origin.0 as f32 + rx as f32) / scale;
             let ly = (self.working_origin.1 as f32 + ry as f32) / scale;
             let lw = (rw as f32 / scale).max(20.0);
@@ -2023,14 +2481,23 @@ impl RustyShotApp {
 
                 let img_w = raw_img.width() as f32;
                 let img_h = raw_img.height() as f32;
-                let scale_x = screen_rect.width() / img_w.max(1.0);
-                let scale_y = screen_rect.height() / img_h.max(1.0);
-                let zoom = scale_x.min(scale_y);
-                let draw_size = vec2(img_w * zoom, img_h * zoom);
-                let origin = pos2(
-                    screen_rect.center().x - draw_size.x * 0.5,
-                    screen_rect.center().y - draw_size.y * 0.5,
-                );
+                let (origin, draw_size, zoom_x, zoom_y) = if self.win32_overlay_saved.is_some() {
+                    // Win32 virtual desktop overlay covers all monitors 1:1
+                    let zx = screen_rect.width() / img_w.max(1.0);
+                    let zy = screen_rect.height() / img_h.max(1.0);
+                    (screen_rect.min, screen_rect.size(), zx, zy)
+                } else {
+                    let scale_x = screen_rect.width() / img_w.max(1.0);
+                    let scale_y = screen_rect.height() / img_h.max(1.0);
+                    let z = scale_x.min(scale_y);
+                    let ds = vec2(img_w * z, img_h * z);
+                    let org = pos2(
+                        screen_rect.center().x - ds.x * 0.5,
+                        screen_rect.center().y - ds.y * 0.5,
+                    );
+                    (org, ds, z, z)
+                };
+                let zoom = (zoom_x + zoom_y) * 0.5;
                 let img_screen_rect = Rect::from_min_size(origin, draw_size);
 
                 let painter = ui.painter();
@@ -2044,15 +2511,39 @@ impl RustyShotApp {
                 // Helper closures for coordinate mapping
                 let to_img = |p: Pos2| -> Pos2 {
                     pos2(
-                        ((p.x - origin.x) / zoom).clamp(0.0, img_w),
-                        ((p.y - origin.y) / zoom).clamp(0.0, img_h),
+                        ((p.x - origin.x) / zoom_x).clamp(0.0, img_w),
+                        ((p.y - origin.y) / zoom_y).clamp(0.0, img_h),
                     )
                 };
                 let to_scr = |r: Rect| -> Rect {
                     Rect::from_min_max(
-                        pos2(origin.x + r.min.x * zoom, origin.y + r.min.y * zoom),
-                        pos2(origin.x + r.max.x * zoom, origin.y + r.max.y * zoom),
+                        pos2(origin.x + r.min.x * zoom_x, origin.y + r.min.y * zoom_y),
+                        pos2(origin.x + r.max.x * zoom_x, origin.y + r.max.y * zoom_y),
                     )
+                };
+                // Resolve screen-space rect of the monitor containing a given image point
+                let monitor_scr_rect = |img_pt: Option<Pos2>| -> Rect {
+                    let found = img_pt
+                        .and_then(|pt| {
+                            self.working_monitors.iter().find(|m| {
+                                let mx0 = m.img_x as f32;
+                                let my0 = m.img_y as f32;
+                                let mx1 = mx0 + m.width as f32;
+                                let my1 = my0 + m.height as f32;
+                                pt.x >= mx0 && pt.x <= mx1 && pt.y >= my0 && pt.y <= my1
+                            })
+                        })
+                        .or_else(|| self.working_monitors.iter().find(|m| m.is_primary))
+                        .or_else(|| self.working_monitors.first());
+                    if let Some(m) = found {
+                        to_scr(Rect::from_min_size(
+                            pos2(m.img_x as f32, m.img_y as f32),
+                            vec2(m.width as f32, m.height as f32),
+                        ))
+                        .intersect(screen_rect)
+                    } else {
+                        screen_rect
+                    }
                 };
 
                 // Detect hovered window for smart window snap when no selection exists
@@ -2114,7 +2605,7 @@ impl RustyShotApp {
                         return;
                 }
 
-                // Arrow keys nudge selection by 1px (Shift+Arrow by 10px)
+                // Arrow keys nudge selection by 1px (Shift+Arrow by 10px), clamped inside image
                 if let Some(ref mut sel) = self.selection_rect {
                     let step = if ctx.input(|i| i.modifiers.shift) { 10.0 } else { 1.0 };
                     let mut delta = Vec2::ZERO;
@@ -2123,7 +2614,23 @@ impl RustyShotApp {
                     if ctx.input(|i| i.key_pressed(Key::ArrowUp)) { delta.y -= step; }
                     if ctx.input(|i| i.key_pressed(Key::ArrowDown)) { delta.y += step; }
                     if delta != Vec2::ZERO {
-                        *sel = sel.translate(delta);
+                        let mut moved = sel.translate(delta);
+                        let dx = if moved.min.x < 0.0 {
+                            -moved.min.x
+                        } else if moved.max.x > img_w {
+                            img_w - moved.max.x
+                        } else {
+                            0.0
+                        };
+                        let dy = if moved.min.y < 0.0 {
+                            -moved.min.y
+                        } else if moved.max.y > img_h {
+                            img_h - moved.max.y
+                        } else {
+                            0.0
+                        };
+                        moved = moved.translate(vec2(dx, dy));
+                        *sel = moved;
                     }
                 }
 
@@ -2323,18 +2830,24 @@ impl RustyShotApp {
                         Color32::from_rgb(34, 197, 94),
                     );
                 } else if self.overlay_color_picker_only {
+                    let active_mon = monitor_scr_rect(
+                        ctx.input(|i| i.pointer.hover_pos()).map(&to_img),
+                    );
                     painter.rect_filled(screen_rect, 0.0, Color32::from_black_alpha(60));
                     painter.text(
-                        pos2(screen_rect.center().x, 36.0),
+                        pos2(active_mon.center().x, active_mon.min.y + 36.0),
                         Align2::CENTER_CENTER,
                         "🎨 Color Picker: Click any pixel to copy HEX  ·  Esc: Cancel",
                         FontId::proportional(14.0),
                         Color32::WHITE,
                     );
                 } else {
+                    let active_mon = monitor_scr_rect(
+                        ctx.input(|i| i.pointer.hover_pos()).map(&to_img),
+                    );
                     painter.rect_filled(screen_rect, 0.0, scrim);
                     painter.text(
-                        pos2(screen_rect.center().x, 36.0),
+                        pos2(active_mon.center().x, active_mon.min.y + 36.0),
                         Align2::CENTER_CENTER,
                         "Drag to select (Shift: 1:1 square)  ·  Click window to snap  ·  Arrows: 1px nudge  ·  Esc: Cancel",
                         FontId::proportional(13.5),
@@ -2388,10 +2901,18 @@ impl RustyShotApp {
 
                     let loupe_w = 132.0;
                     let loupe_h = 136.0;
-                    let loupe_pos = pos2(
-                        (hover.x + 18.0).min(screen_rect.max.x - loupe_w - 8.0),
-                        (hover.y + 18.0).min(screen_rect.max.y - loupe_h - 8.0),
-                    );
+                    let mon_rect = monitor_scr_rect(Some(ip));
+                    let loupe_x = if hover.x + 18.0 + loupe_w + 8.0 <= mon_rect.max.x {
+                        hover.x + 18.0
+                    } else {
+                        (hover.x - loupe_w - 18.0).max(mon_rect.min.x + 8.0)
+                    };
+                    let loupe_y = if hover.y + 18.0 + loupe_h + 8.0 <= mon_rect.max.y {
+                        hover.y + 18.0
+                    } else {
+                        (hover.y - loupe_h - 18.0).max(mon_rect.min.y + 8.0)
+                    };
+                    let loupe_pos = pos2(loupe_x, loupe_y);
                     let loupe_rect = Rect::from_min_size(loupe_pos, vec2(loupe_w, loupe_h));
                     painter.rect(
                         loupe_rect,
@@ -2448,8 +2969,73 @@ impl RustyShotApp {
             let mut do_editor = false;
             let mut do_cancel = false;
 
+            // Position toolbar cleanly inside the monitor containing the selection (never split across bezels)
+            let full_scr = ctx.screen_rect();
+            let (tb_pos, tb_pivot) = if let Some(raw_img) = self.working_image.as_ref() {
+                let iw = raw_img.width() as f32;
+                let ih = raw_img.height() as f32;
+                let (org, zx, zy) = if self.win32_overlay_saved.is_some() {
+                    (
+                        full_scr.min,
+                        full_scr.width() / iw.max(1.0),
+                        full_scr.height() / ih.max(1.0),
+                    )
+                } else {
+                    let z = (full_scr.width() / iw.max(1.0)).min(full_scr.height() / ih.max(1.0));
+                    let ds = vec2(iw * z, ih * z);
+                    (
+                        pos2(
+                            full_scr.center().x - ds.x * 0.5,
+                            full_scr.center().y - ds.y * 0.5,
+                        ),
+                        z,
+                        z,
+                    )
+                };
+                let to_s = |r: Rect| -> Rect {
+                    Rect::from_min_max(
+                        pos2(org.x + r.min.x * zx, org.y + r.min.y * zy),
+                        pos2(org.x + r.max.x * zx, org.y + r.max.y * zy),
+                    )
+                };
+                let sel_center = sel.center();
+                let mon_r = self
+                    .working_monitors
+                    .iter()
+                    .find(|m| {
+                        let mx0 = m.img_x as f32;
+                        let my0 = m.img_y as f32;
+                        sel_center.x >= mx0
+                            && sel_center.x <= mx0 + m.width as f32
+                            && sel_center.y >= my0
+                            && sel_center.y <= my0 + m.height as f32
+                    })
+                    .or_else(|| self.working_monitors.iter().find(|m| m.is_primary))
+                    .or_else(|| self.working_monitors.first())
+                    .map(|m| {
+                        to_s(Rect::from_min_size(
+                            pos2(m.img_x as f32, m.img_y as f32),
+                            vec2(m.width as f32, m.height as f32),
+                        ))
+                        .intersect(full_scr)
+                    })
+                    .unwrap_or(full_scr);
+                let sel_s = to_s(sel);
+                let tb_y = if sel_s.max.y + 66.0 <= mon_r.max.y {
+                    sel_s.max.y + 10.0
+                } else if sel_s.min.y - 66.0 >= mon_r.min.y {
+                    sel_s.min.y - 58.0
+                } else {
+                    mon_r.min.y + 18.0
+                };
+                (pos2(mon_r.center().x, tb_y), Align2::CENTER_TOP)
+            } else {
+                (pos2(full_scr.center().x, full_scr.min.y + 18.0), Align2::CENTER_TOP)
+            };
+
             egui::Area::new(egui::Id::new("overlay_toolbar"))
-                .anchor(Align2::CENTER_TOP, vec2(0.0, 18.0))
+                .pivot(tb_pivot)
+                .fixed_pos(tb_pos)
                 .order(egui::Order::Foreground)
                 .show(ctx, |ui| {
                     egui::Frame::none()
@@ -2549,14 +3135,20 @@ impl RustyShotApp {
             } else if do_copy {
                 if let Some(img) = self.build_selected_region_image() {
                     let prev_save = self.config.auto_save_file;
+                    let prev_copy = self.config.auto_copy_clipboard;
                     self.config.auto_save_file = false;
+                    self.config.auto_copy_clipboard = true;
                     self.finalize_captured_image(ctx, img, "Region", false);
                     self.config.auto_save_file = prev_save;
+                    self.config.auto_copy_clipboard = prev_copy;
                 }
             } else if do_save
                 && let Some(img) = self.build_selected_region_image()
             {
+                let prev_save = self.config.auto_save_file;
+                self.config.auto_save_file = true;
                 self.finalize_captured_image(ctx, img, "Region", false);
+                self.config.auto_save_file = prev_save;
             }
         }
 
@@ -2979,8 +3571,34 @@ impl eframe::App for RustyShotApp {
             && ctx.input(|i| i.viewport().close_requested())
         {
             self.window_hidden_in_tray = true;
+            win32_hide_window(self.hwnd);
             ctx.send_viewport_cmd(ViewportCommand::CancelClose);
             ctx.send_viewport_cmd(ViewportCommand::Visible(false));
+        }
+
+        // Apply deferred Win32 window bounds after winit finishes style/decoration updates (while cloaked)
+        if let Some((bx, by, bw, bh, topmost)) = self.pending_bounds.take() {
+            win32_set_window_bounds(self.hwnd, bx, by, bw, bh, topmost);
+        }
+
+        // Sync shared flags for background hotkey thread
+        self.hide_on_capture_flag
+            .store(self.config.hide_window_on_capture, Ordering::Relaxed);
+        self.hidden_in_tray_flag
+            .store(self.window_hidden_in_tray, Ordering::Relaxed);
+        self.in_overlay_flag
+            .store(self.mode == AppMode::RegionOverlay, Ordering::Relaxed);
+
+        // Apply any pre-captured screenshot taken cleanly while window was hidden
+        let ready_capture = self
+            .precaptured
+            .lock()
+            .ok()
+            .and_then(|mut slot| slot.take());
+        if let Some(payload) = ready_capture {
+            self.was_hidden_before_capture = payload.was_hidden;
+            self.was_minimized_before_capture = payload.was_minimized;
+            self.apply_captured_result(ctx, payload.action, payload.result);
         }
 
         // Poll background tray, hotkey & single-instance actions
@@ -3184,6 +3802,21 @@ impl eframe::App for RustyShotApp {
                 ctx.request_repaint_after(Duration::from_millis(100));
             } else {
                 self.status_toast = None;
+            }
+        }
+
+        // Uncloak window only AFTER OpenGL has rendered clean frames at the target size
+        if self.uncloak_countdown > 0 {
+            self.uncloak_countdown -= 1;
+            if self.uncloak_countdown == 0 {
+                win32_set_cloak(self.hwnd, false);
+                if self.uncloak_focus {
+                    self.uncloak_focus = false;
+                    win32_focus_window(self.hwnd);
+                    ctx.send_viewport_cmd(ViewportCommand::Focus);
+                }
+            } else {
+                ctx.request_repaint();
             }
         }
 

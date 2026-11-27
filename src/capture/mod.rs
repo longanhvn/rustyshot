@@ -17,12 +17,26 @@ pub struct WindowSummary {
     pub height: u32,
 }
 
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub struct MonitorBounds {
+    pub x: i32,
+    pub y: i32,
+    pub img_x: u32,
+    pub img_y: u32,
+    pub width: u32,
+    pub height: u32,
+    pub scale_factor: f32,
+    pub is_primary: bool,
+}
+
 #[derive(Clone, Debug)]
 pub struct ScreenCaptureResult {
     pub image: RgbaImage,
     pub origin_x: i32,
     pub origin_y: i32,
     pub scale_factor: f32,
+    pub monitors: Vec<MonitorBounds>,
 }
 
 pub fn capture_primary_screen() -> Result<ScreenCaptureResult, String> {
@@ -38,15 +52,28 @@ pub fn capture_primary_screen() -> Result<ScreenCaptureResult, String> {
     let origin_x = primary.x().unwrap_or(0);
     let origin_y = primary.y().unwrap_or(0);
     let scale_factor = primary.scale_factor().unwrap_or(1.0);
+    let is_primary = primary.is_primary().unwrap_or(true);
     let img = primary
         .capture_image()
         .map_err(|e| format!("Screen capture failed: {e}"))?;
+    let w = img.width();
+    let h = img.height();
 
     Ok(ScreenCaptureResult {
         image: img,
         origin_x,
         origin_y,
         scale_factor,
+        monitors: vec![MonitorBounds {
+            x: origin_x,
+            y: origin_y,
+            img_x: 0,
+            img_y: 0,
+            width: w,
+            height: h,
+            scale_factor,
+            is_primary,
+        }],
     })
 }
 
@@ -63,11 +90,17 @@ pub fn capture_all_monitors_composite() -> Result<ScreenCaptureResult, String> {
     let mut min_y = i32::MAX;
     let mut max_x = i32::MIN;
     let mut max_y = i32::MIN;
+    let mut primary_scale = 1.0f32;
     let mut captured = Vec::with_capacity(monitors.len());
 
     for m in &monitors {
         let mx = m.x().unwrap_or(0);
         let my = m.y().unwrap_or(0);
+        let scale = m.scale_factor().unwrap_or(1.0);
+        let is_primary = m.is_primary().unwrap_or(false);
+        if is_primary {
+            primary_scale = scale;
+        }
         if let Ok(img) = m.capture_image() {
             let mw = img.width() as i32;
             let mh = img.height() as i32;
@@ -75,7 +108,7 @@ pub fn capture_all_monitors_composite() -> Result<ScreenCaptureResult, String> {
             min_y = min_y.min(my);
             max_x = max_x.max(mx + mw);
             max_y = max_y.max(my + mh);
-            captured.push((mx, my, img));
+            captured.push((mx, my, scale, is_primary, img));
         }
     }
 
@@ -86,18 +119,32 @@ pub fn capture_all_monitors_composite() -> Result<ScreenCaptureResult, String> {
     let total_w = (max_x - min_x).max(1) as u32;
     let total_h = (max_y - min_y).max(1) as u32;
     let mut canvas: RgbaImage = ImageBuffer::from_pixel(total_w, total_h, Rgba([15, 18, 26, 255]));
+    let mut bounds = Vec::with_capacity(captured.len());
 
-    for (mx, my, img) in captured {
-        let ox = (mx - min_x) as i64;
-        let oy = (my - min_y) as i64;
-        image::imageops::overlay(&mut canvas, &img, ox, oy);
+    for (mx, my, scale, is_primary, img) in captured {
+        let ox = (mx - min_x).max(0) as u32;
+        let oy = (my - min_y).max(0) as u32;
+        let w = img.width();
+        let h = img.height();
+        image::imageops::overlay(&mut canvas, &img, ox as i64, oy as i64);
+        bounds.push(MonitorBounds {
+            x: mx,
+            y: my,
+            img_x: ox,
+            img_y: oy,
+            width: w,
+            height: h,
+            scale_factor: scale,
+            is_primary,
+        });
     }
 
     Ok(ScreenCaptureResult {
         image: canvas,
         origin_x: min_x,
         origin_y: min_y,
-        scale_factor: 1.0,
+        scale_factor: primary_scale.max(1.0),
+        monitors: bounds,
     })
 }
 
